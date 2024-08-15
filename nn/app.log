@@ -1,0 +1,66 @@
+2024-08-14 00:30:03 - INFO - fall: 5.279954766735134, pred: 0.5708382106154222
+2024-08-14 00:30:39 - INFO - fall: 0.9604427707636614, pred: 0.5370155949679383
+2024-08-14 00:30:58 - INFO - fall: 4.663474758976848, pred: 0.5370155949679383
+2024-08-14 00:31:42 - INFO - fall: 5.275214246937674, pred: 0.6167307692911876
+2024-08-14 07:52:27 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 07:52:27 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 07:52:27 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 07:55:35 - INFO - fall: 0.30143452565551065, pred: 0.6055898453200683
+2024-08-14 07:56:16 - INFO - fall: 2.367846926499478, pred: 0.24227757696908014
+2024-08-14 07:56:54 - INFO - fall: 3.4597495972669066, pred: 0.2461322796163934
+2024-08-14 07:57:31 - INFO - fall: 1.0397486417547324, pred: 0.5336006685194921
+2024-08-14 07:58:12 - INFO - fall: 3.402476241640981, pred: 0.601603788088994
+2024-08-14 08:01:07 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:01:07 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:01:07 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:02:25 - INFO - fall: 2.042707284303116, pred: 0.28893492975532276
+2024-08-14 08:03:09 - INFO - fall: 5.571778238044693, pred: 0.21767950885550746
+2024-08-14 08:03:53 - INFO - fall: 4.425974086394422, pred: 0.6086062494672397
+2024-08-14 08:34:50 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:34:50 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:34:51 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:35:29 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:35:29 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:35:29 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:43:25 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:43:26 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:43:26 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:44:04 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:44:04 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:44:04 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:53:46 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:53:46 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:53:46 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:55:40 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:55:40 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 08:55:40 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:00:32 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:00:32 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:00:32 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:01:09 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:01:09 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:01:09 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:01:48 - INFO - fall: 0.6230395964182005, pred: 0.5954407298588897
+2024-08-14 09:02:26 - INFO - fall: 2.304396267974866, pred: 0.16643749761927573
+2024-08-14 09:03:05 - INFO - fall: 1.198017274223382, pred: 0.19980483880048538
+2024-08-14 09:06:55 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:06:55 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:06:55 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:08:46 - INFO - fall: 2.822600802290875, pred: 0.03805796386834004
+2024-08-14 09:12:09 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:12:10 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:12:10 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:13:41 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:13:41 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:13:41 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 09:15:07 - INFO - fall: 1.8882072927923623, pred: 0.03555513404224975
+2024-08-14 22:55:15 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 22:55:15 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 22:55:15 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-14 22:56:57 - INFO - fall: 2.749105315645565, pred: 0.6879331988406552
+2024-08-14 22:57:36 - INFO - fall: 1.3204150210009473, pred: 0.01092764058630813
+2024-08-14 22:58:15 - INFO - fall: 5.841310130478384, pred: 0.11888245169673972
+2024-08-14 22:58:56 - INFO - fall: 0.971308779888588, pred: 6.182658503165337
+2024-08-15 22:57:49 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-15 22:57:49 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
+2024-08-15 22:57:49 - WARNING - Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.
