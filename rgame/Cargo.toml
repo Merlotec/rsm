@@ -15,6 +15,7 @@ serde = "1.0.194"
 serde_json = "1.0.111"
 image = "0.22.4"
 nalgebra={version="0.32.3", features=["serde"]}
-opencv = {version ="0.92.2", features = ["imgproc"]}
+opencv = {version ="0.92.2", features = ["imgproc", "clang-runtime"]}
 scrap = "0.5.0"
 rodio = "0.19.0"
+tesseract = { versino="0.15.1"}

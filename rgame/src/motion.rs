@@ -1,3 +1,4 @@
+use bevy::math::Rect;
 use opencv::{
     boxed_ref::BoxedRef, core::{Mat, Mat_AUTO_STEP, Scalar, Size, BORDER_DEFAULT}, imgproc::{self, CHAIN_APPROX_SIMPLE, COLOR_BGR2GRAY, COLOR_BGR2HSV, RETR_EXTERNAL, THRESH_BINARY}, prelude::*, types::VectorOfMat, videoio::VideoCapture
 };
@@ -56,7 +57,7 @@ impl MotionDetector {
         }
     }
 
-    pub fn detect(&mut self) -> bool {
+    pub fn detect(&mut self) -> Option<opencv::core::Rect> {
         if self.use_color {
             self.detect_motion_color()
         } else {
@@ -64,32 +65,23 @@ impl MotionDetector {
         }
     }
 
-    pub fn detect_motion(&mut self) -> bool {
+    pub fn detect_motion(&mut self) -> Option<opencv::core::Rect> {
         // let mut cap = Capturer::new(Display::primary().expect("Failed to get primary display"))
         //     .expect("Failed to begin capture");
         // let width = cap.width();
         // let height = cap.height();
 
-        let portion = autopilot::bitmap::capture_screen_portion(autopilot::geometry::Rect { origin: autopilot::geometry::Point::new(self.x as f64, self.y as f64), size: autopilot::geometry::Size::new(self.width as f64, self.height as f64) });
-
-        if portion.is_err() {
-            return false;
-        }
-
+        let portion = autopilot::bitmap::capture_screen_portion(autopilot::geometry::Rect { origin: autopilot::geometry::Point::new(self.x as f64, self.y as f64), size: autopilot::geometry::Size::new(self.width as f64, self.height as f64) }).ok()?;
         // let one_frame = cap
         //     .frame()
         //     .expect("Failed to capture frame");
     
         // Convert the frame to a Mat (2D)
-        let portion = portion.unwrap();
+        let portion = portion;
 
-        let raw = portion.image.as_rgb8();
-        if raw.is_none() {
-            println!("Could not convert to rgb8");
-            return false;
-        }
+        let raw = portion.image.as_rgb8()?;
 
-        let mat = Mat::from_slice(&raw.unwrap()).unwrap();
+        let mat = Mat::from_slice(&raw).ok()?;
     
         // Reshape the flat buffer into a 2D matrix (with 4 channels for RGBA)
         let mat = mat.reshape(3, portion.size.height as i32).unwrap();
@@ -107,9 +99,8 @@ impl MotionDetector {
         // Convert to grayscale
         let mut gray = Mat::default();
 
-        if let Err(_) = imgproc::cvt_color(&mat, &mut gray, COLOR_BGR2GRAY, 0) {
-            return false;
-        }
+        imgproc::cvt_color(&mat, &mut gray, COLOR_BGR2GRAY, 0).ok()?;
+
         let mut output = Mat::default();
         // Apply GaussianBlur
         imgproc::gaussian_blur(
@@ -119,111 +110,97 @@ impl MotionDetector {
             0.0,
             0.0,
             BORDER_DEFAULT,
-        )
-        .unwrap();
+        ).ok()?;
 
-        if self.previous_frame.is_none() {
+        if let Some(previous_frame) = &self.previous_frame {
+             // Compute the absolute difference between the current frame and the previous frame
+            let mut frame_diff = Mat::default();
+            opencv::core::absdiff(previous_frame, &output, &mut frame_diff)
+                .unwrap();
             self.previous_frame = Some(output);
-            return false;
-        }
 
-        // Compute the absolute difference between the current frame and the previous frame
-        let mut frame_diff = Mat::default();
-        opencv::core::absdiff(&self.previous_frame.as_ref().unwrap(), &output, &mut frame_diff)
+            // if let Some(previous_time) = self.previous_time {
+            //     if Instant::now().duration_since(previous_time) < self.time_threshold {
+            //         return false;
+            //     }
+            // }
+
+            // Apply a threshold to get binary image
+            let mut thresh = Mat::default();
+            imgproc::threshold(
+                &frame_diff,
+                &mut thresh,
+                self.threshold,
+                255.0,
+                THRESH_BINARY,
+            )
             .unwrap();
-        self.previous_frame = Some(output);
 
-        // if let Some(previous_time) = self.previous_time {
-        //     if Instant::now().duration_since(previous_time) < self.time_threshold {
-        //         return false;
-        //     }
-        // }
+            // Find contours of the movement
+            let mut contours = VectorOfMat::new();
+            imgproc::find_contours(
+                &thresh,
+                &mut contours,
+                RETR_EXTERNAL,
+                CHAIN_APPROX_SIMPLE,
+                opencv::core::Point::new(0, 0),
+            )
+            .unwrap();
 
-        // Apply a threshold to get binary image
-        let mut thresh = Mat::default();
-        imgproc::threshold(
-            &frame_diff,
-            &mut thresh,
-            self.threshold,
-            255.0,
-            THRESH_BINARY,
-        )
-        .unwrap();
+            for contour in contours.iter() {
+                if imgproc::contour_area(&contour, false).unwrap() < self.min_contour_area {
+                    continue;
+                }
 
-        // Find contours of the movement
-        let mut contours = VectorOfMat::new();
-        imgproc::find_contours(
-            &thresh,
-            &mut contours,
-            RETR_EXTERNAL,
-            CHAIN_APPROX_SIMPLE,
-            opencv::core::Point::new(0, 0),
-        )
-        .unwrap();
-
-        for contour in contours.iter() {
-            if imgproc::contour_area(&contour, false).unwrap() < self.min_contour_area {
-                continue;
+                // If we detect significant movement
+                let rect = imgproc::bounding_rect(&contour).unwrap();
+                // println!(
+                //     "Movement detected at region: x={}, y={}, width={}, height={}",
+                //     rect.x, rect.y, rect.width, rect.height
+                // );
+                self.previous_time = Some(Instant::now());
+                return Some(rect);
             }
-
-            // If we detect significant movement
-            let rect = imgproc::bounding_rect(&contour).unwrap();
-            // println!(
-            //     "Movement detected at region: x={}, y={}, width={}, height={}",
-            //     rect.x, rect.y, rect.width, rect.height
-            // );
-            self.previous_time = Some(Instant::now());
-            return true;
+            None
+        } else {
+            self.previous_frame = Some(output);
+            None
         }
-
-        false
     }
 
-    pub fn detect_motion_color(&mut self) -> bool {
-        let portion = autopilot::bitmap::capture_screen_portion(autopilot::geometry::Rect { origin: autopilot::geometry::Point::new(self.x as f64, self.y as f64), size: autopilot::geometry::Size::new(self.width as f64, self.height as f64) });
-
-        if portion.is_err() {
-            return false;
-        }
+    pub fn detect_motion_color(&mut self) -> Option<opencv::core::Rect> {
+        let portion = autopilot::bitmap::capture_screen_portion(autopilot::geometry::Rect { origin: autopilot::geometry::Point::new(self.x as f64, self.y as f64), size: autopilot::geometry::Size::new(self.width as f64, self.height as f64) }).ok()?;
 
         // let one_frame = cap
         //     .frame()
         //     .expect("Failed to capture frame");
     
         // Convert the frame to a Mat (2D)
-        let portion = portion.unwrap();
 
-        let raw = portion.image.as_rgb8();
-        if raw.is_none() {
-            println!("Could not convert to rgb8");
-            return false;
-        }
+        let raw = portion.image.as_rgb8()?;
 
-        let mat = Mat::from_slice(&raw.unwrap()).unwrap();
+        let mat = Mat::from_slice(&raw).ok()?;
     
         // Reshape the flat buffer into a 2D matrix (with 4 channels for RGBA)
-        let frame = mat.reshape(3, portion.size.height as i32).unwrap();
+        let frame = mat.reshape(3, portion.size.height as i32).ok()?;
 
 
         // Convert the captured frame to HSV color space
         let mut hsv_frame = Mat::default();
-        imgproc::cvt_color(&frame, &mut hsv_frame, COLOR_BGR2HSV, 0).unwrap();
+        imgproc::cvt_color(&frame, &mut hsv_frame, COLOR_BGR2HSV, 0).ok()?;
 
         // Create a mask for green color
         let mut green_mask = Mat::default();
-        opencv::core::in_range(&hsv_frame, &self.color_lower, &self.color_upper, &mut green_mask).unwrap();
+        opencv::core::in_range(&hsv_frame, &self.color_lower, &self.color_upper, &mut green_mask).ok()?;
 
         // Apply the mask to the frame to isolate green regions
         let mut green_frame = Mat::default();
-        opencv::core::bitwise_and(&frame, &frame, &mut green_frame, &green_mask).unwrap();
+        opencv::core::bitwise_and(&frame, &frame, &mut green_frame, &green_mask).ok()?;
 
         // Convert the green frame to grayscale
         let mut gray = Mat::default();
 
-        if let Err(e) = imgproc::cvt_color(&green_frame, &mut gray, COLOR_BGR2GRAY, 0) {
-            println!("imgproc error! {}", e);
-            return false;
-        }
+        imgproc::cvt_color(&green_frame, &mut gray, COLOR_BGR2GRAY, 0).ok()?;
         let mut output = Mat::default();
         // Apply GaussianBlur
         imgproc::gaussian_blur(
@@ -237,45 +214,44 @@ impl MotionDetector {
         .unwrap();
 
         // If the previous frame is None, initialize it and return false
-        if self.previous_frame.is_none() {
+        if let Some(previous_frame) = &self.previous_frame {
+            // Compute the absolute difference between the current frame and the previous frame
+            let mut frame_diff = Mat::default();
+            opencv::core::absdiff(previous_frame, &output, &mut frame_diff).unwrap();
             self.previous_frame = Some(output);
-            return false;
-        }
-
-        // Compute the absolute difference between the current frame and the previous frame
-        let mut frame_diff = Mat::default();
-        opencv::core::absdiff(&self.previous_frame.as_ref().unwrap(), &output, &mut frame_diff).unwrap();
-        self.previous_frame = Some(output);
 
 
-        // Apply a threshold to get a binary image
-        let mut thresh = Mat::default();
-        imgproc::threshold(&frame_diff, &mut thresh, self.threshold, 255.0, THRESH_BINARY).unwrap();
+            // Apply a threshold to get a binary image
+            let mut thresh = Mat::default();
+            imgproc::threshold(&frame_diff, &mut thresh, self.threshold, 255.0, THRESH_BINARY).unwrap();
 
-        // Find contours of the movement
-        let mut contours = VectorOfMat::new();
-        imgproc::find_contours(&thresh, &mut contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, opencv::core::Point::new(0, 0)).unwrap();
+            // Find contours of the movement
+            let mut contours = VectorOfMat::new();
+            imgproc::find_contours(&thresh, &mut contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, opencv::core::Point::new(0, 0)).unwrap();
 
-        // Process the contours to detect significant movement
-        for contour in contours.iter() {
-            if imgproc::contour_area(&contour, false).unwrap() < self.min_contour_area {
-                continue; // Ignore small movements
+            // Process the contours to detect significant movement
+            for contour in contours.iter() {
+                if imgproc::contour_area(&contour, false).unwrap() < self.min_contour_area {
+                    continue; // Ignore small movements
+                }
+
+                // If significant movement is detected, get the bounding box
+                let rect = imgproc::bounding_rect(&contour).unwrap();
+                self.previous_time = Some(Instant::now());
+                return Some(rect);
             }
-
-            // If significant movement is detected, get the bounding box
-            let rect = imgproc::bounding_rect(&contour).unwrap();
-            self.previous_time = Some(Instant::now());
-            return true;
+            None
+        } else {
+            self.previous_frame = Some(output);
+            None
         }
-
-        false
     }
 }
 
 
 pub struct SmartTrigger {
     detector: Mutex<MotionDetector>,
-    trigger: Mutex<Option<SystemTime>>,
+    trigger: Mutex<Option<(Rect, SystemTime)>>,
     last_flush: Mutex<Option<SystemTime>>,
 }
 
@@ -291,20 +267,21 @@ impl SmartTrigger {
 
     // Uses mutexes and atomic operations to uupdate.
     pub fn update(&self) {
-        if self.detector.lock().unwrap().detect() {
+        if let Some(rect) = self.detector.lock().unwrap().detect() {
             let mut tr = self.trigger.lock().unwrap();
-            *tr.deref_mut() = Some(SystemTime::now());
+            let brect = Rect::new(rect.x as f32, rect.y as f32, (rect.x + rect.width) as f32, (rect.y + rect.height) as f32);
+            *tr.deref_mut() = Some((brect, SystemTime::now()));
         }
     }
 
-    pub fn flush_detect(&self, buffer: Duration) -> Option<SystemTime> {
+    pub fn flush_detect(&self, buffer: Duration) -> Option<(Rect, SystemTime)> {
         let mut tr = self.trigger.lock().unwrap();
-        if let Some(trigger) = tr.deref().clone() {
+        if let Some((rect, trigger)) = tr.deref().clone() {
             *tr.deref_mut() = None;
             if self.last_flush.lock().unwrap().map(|x| x + buffer < trigger).unwrap_or(true) {
                 let mut lt = self.last_flush.lock().unwrap();
                 *lt.deref_mut() = Some(trigger);
-                Some(trigger)
+                Some((rect, trigger))
             } else {
                 None
             }
