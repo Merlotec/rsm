@@ -14,7 +14,7 @@ device_query = "1.1.3"
 serde = "1.0.194"
 serde_json = "1.0.111"
 image = "0.22.4"
-nalgebra={version="0.32.3", features=["serde"]}
+nalgebra={version="0.32.3"}
 opencv = {version ="0.92.2", features = ["imgproc", "clang-runtime"]}
 scrap = "0.5.0"
 rodio = "0.19.0"

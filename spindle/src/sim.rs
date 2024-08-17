@@ -4,6 +4,12 @@ use nalgebra::{ComplexField, SVector, VectorN};
 
 use crate::game::*;
 
+pub const LAYOUT: [u8; 37] = [
+    0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20,
+    14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26,
+];
+
+
 pub struct Prediction {
     pub point: f64,
 }
@@ -30,6 +36,117 @@ pub struct SimParams {
     pub dynamic_weights: SVector<f64, 8>,
     pub end_t: f64,
     pub end_d: f64,
+}
+
+#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Solution {
+    pub i: u8,
+
+    pub n: u8,
+
+    pub plate_pos: f64,
+
+    pub end_d: f64,
+
+    pub end_t: f64,
+    
+    /// Position of the ball when it falls off the circle.
+    pub dynamic_dis: f64,
+
+    /// The velocity of the ball when it falls of the circle.
+    pub dynamic_vel: f64,
+
+    /// Position of the plate when the ball falls off the circle.
+    pub plate_dis: f64,
+
+    /// The position of the plate when the ball enters the slot (after it falls).
+    pub final_plate_dis: f64,
+
+    // The velocity of the plate when the ball falls.
+    pub plate_vel: f64,
+
+    pub clockwise: bool,
+}
+
+impl Solution {
+    pub fn create_outcome(&self, n: u8) -> Option<Outcome> {
+        let i = *LAYOUT.iter().find(|x| **x == n)?;
+
+        let proximity = {
+            let up = (i as i16 - self.i as i16) % LAYOUT.len() as i16;
+            let down = LAYOUT.len() as i16 - up;
+
+            if up.abs() < down.abs() {
+                up
+            } else {
+                -down
+            }
+        } as i8;
+
+        let slot_displ_sl =  {
+            let lpos = dis_to_pos(self.dynamic_dis - self.plate_dis);
+            let i_dyn = PlateState::slot_at_local_pos(lpos, LAYOUT.len());
+            let x = ((i as i16 - i_dyn as i16) % LAYOUT.len() as i16) as u8;
+            if self.clockwise {
+                x
+            } else {
+                LAYOUT.len() as u8 - x
+            }
+        };
+
+        let abs_displ_sl =  {
+            let lpos = dis_to_pos(self.dynamic_dis - self.final_plate_dis);
+            let i_dyn = PlateState::slot_at_local_pos(lpos, LAYOUT.len());
+            let x = ((i as i16 - i_dyn as i16) % LAYOUT.len() as i16) as u8;
+            if self.clockwise {
+                x
+            } else {
+                LAYOUT.len() as u8 - x
+            }
+        };
+
+        let abs_displ = {
+            let ppos = PlateState::local_pos_at_slot(i as usize, LAYOUT.len());
+            let glob = ppos + self.final_plate_dis;
+            if self.clockwise {
+                dis_to_pos(self.dynamic_dis - glob)
+            } else {
+                dis_to_pos(glob - self.dynamic_dis)
+            }
+            
+        };
+
+        Some(Outcome {
+            n,
+            i,
+            proximity,
+            slot_displ_sl,
+            abs_displ,
+            abs_displ_sl,
+        })
+    }
+}
+
+#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Outcome {
+
+    // Actual number of the outcome.
+    pub n: u8,
+
+    // Plate index of the outcome.
+    pub i: u8,
+
+    /// Number of slots away.
+    pub proximity: i8,
+
+    /// The number of slots travelled after the ball fell off the circle. Should be bigger than full displacement because the plate spins.
+    pub slot_displ_sl: u8,
+
+    /// Accounting for the movement in the table, if the ball takes end_t seconds to fall, how many slots did it move relative to the static table.
+    pub abs_displ_sl: u8,
+
+    /// Same as above but not discretised. 
+    pub abs_displ: f64,
 }
 
 impl SimParams {
@@ -194,7 +311,11 @@ impl SimState {
                 },
                 None => {
                     let d0 = *lpos;
-                    let d1 = *lpos + self.dynamic_dis(*lpos, click_pos) * self.directional_dynamic();
+                    let mut delta_d = self.dynamic_dis(*lpos, click_pos);
+                    if delta_d < std::f64::consts::PI / 2.0 {
+                        delta_d = std::f64::consts::PI * 2.0 + delta_d;
+                    }
+                    let d1 = *lpos + delta_d * self.directional_dynamic();
                     let mut initial_state = self.initial_dynamic_state(delta, d0, d1, 40);
                     initial_state.t = self.time(time);
                     self.dynamic_state = Some(initial_state)
@@ -247,23 +368,50 @@ impl SimState {
     }
         
 
-    pub fn solve(&self) -> Option<f64> {
+    pub fn solve(&self) -> Option<Solution> {
         // Find when velocity drops below min.
         let ds = self.dynamic_state?.solve(self.params.min_vel, self.step, self.params.dynamic_acc, self.params.k, self.params.att, self.params.dynamic_weights)?;
         self.finalize(ds)
     }
 
-    pub fn finalize(&self, ds: DynamicState) -> Option<f64> {
+    pub fn finalize(&self, ds: DynamicState) -> Option<Solution> {
         let final_pos = dis_to_pos(ds.dis + self.directional_end_d());
         let final_t = ds.t + self.params.end_t;
         let delta = final_t - self.plate_state?.t;
         if delta > 0.0 {
             let ps = self.plate_state?.approximate(delta, self.step); 
-            Some(ps.local_pos(final_pos))
+            let plate_pos = ps.local_pos(final_pos);
+            let i = PlateState::slot_at_local_pos(plate_pos, LAYOUT.len());
+            let n = LAYOUT[i];
+            Some(Solution {
+                i: i as u8,
+                n,
+                dynamic_dis: ds.dis,
+                dynamic_vel: ds.vel,
+                plate_dis: self.plate_state?.dis,
+                final_plate_dis: ps.dis,
+                plate_vel: self.plate_state?.vel,
+                end_d: self.params.end_d,
+                end_t: self.params.end_t,
+                plate_pos,
+                clockwise: self.clockwise,
+            })
         } else {
             None
         }
     }
+
+        // pub fn finalize(&self, ds: DynamicState) -> Option<f64> {
+    //     let final_pos = dis_to_pos(ds.dis + self.directional_end_d());
+    //     let final_t = ds.t + self.params.end_t;
+    //     let delta = final_t - self.plate_state?.t;
+    //     if delta > 0.0 {
+    //         let ps = self.plate_state?.approximate(delta, self.step); 
+    //         Some(ps.local_pos(final_pos))
+    //     } else {
+    //         None
+    //     }
+    // }
 
     pub fn system_time(&self, t: f64) -> SystemTime {
         self.start + Duration::from_secs_f64(t)
@@ -289,6 +437,17 @@ impl SimState {
             None
         }
     }
+
+    // pub fn add_final_dynamic(&mut self, time: SystemTime) {
+    //     if let Some(dy) = self.dynamic_state {
+    //         let delta = self.time(time) - dy.t;
+    //         if delta > 0.0 {
+    //             let final_dis = dy.acc
+    //             let final_dy = dy.approximate(delta, self.step, self.params.dynamic_acc, self.params.k,self.params.att, self.params.dynamic_weights);
+
+    //         }
+    //     }
+    // }
 
     pub fn ssr_dynamic(&self, params: &SimParams, init_state: &DynamicState) -> (usize, f64, f64) {
         let mut ssr_t = 0.0;

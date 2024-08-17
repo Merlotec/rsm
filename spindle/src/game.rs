@@ -89,9 +89,13 @@ impl PlateState {
         dis_to_pos(dis - self.dis)
     }
 
-    pub fn slot_at_local_pos(&self, pos: f64, n: usize) -> usize {
+    pub fn slot_at_local_pos(pos: f64, n: usize) -> usize {
         let ds = (std::f64::consts::PI * 2.0) / n as f64;
         (pos / ds) as usize
+    }
+
+    pub fn local_pos_at_slot(slot: usize, n: usize) -> f64 {
+        slot as f64 * (std::f64::consts::PI * 2.0) / n as f64
     }
 }
 
@@ -118,12 +122,13 @@ impl DynamicState {
         }
     }
 
+    /// ******************* The objective function ********************
     pub fn predict(self, dt: f64, a: f64, k: f64, att: f64, w: SVector<f64, 8>) -> DynamicState {
         if self.vel == 0.0 {
             return self;
         }
         let vabs = self.vel.abs();
-        let acc = a + k * vabs.powf(att) + vabs * w[0] + vabs.pow(2) * w[1] + vabs.powf(1.25) * w[2] + vabs.pow(1.5) * w[3] + vabs.abs().powf(1.75) * w[4] + vabs.abs().powf(1.125) * w[5] + vabs.powf(2.25) * w[6] + vabs.powf(2.25) * w[7]; // Approximately proportional to velocity, we don't need to be super accurate.
+        let acc = a + k * vabs.powf(att) + vabs * w[0] + vabs.pow(2) * w[1] + vabs.pow(3) * w[2] + vabs.pow(1.5) * w[3] + vabs.abs().powf(1.75) * w[4] + vabs.abs().powf(1.125) * w[5] + vabs.powf(2.5) * w[6] + vabs.powf(3.5) * w[7]; // Approximately proportional to velocity, we don't need to be super accurate.
         let mut vel: f64 = self.vel + acc * dt * self.vel.signum(); // Approximating a as a constant should be close enough given small enough dt.
         let mut dis = self.dis + self.vel * dt + 0.5 * acc * dt * dt * self.vel.signum();
         if vel.is_sign_positive() != self.vel.is_sign_positive() {

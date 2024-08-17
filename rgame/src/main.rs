@@ -1,5 +1,6 @@
 use autopilot::{bitmap, geometry::Point};
 use bevy::input::mouse::MouseButtonInput;
+use bevy::window::WindowResolution;
 use bevy::{
     input::{keyboard::KeyboardInput, ButtonState},
     prelude::*,
@@ -10,7 +11,8 @@ use motion::SmartTrigger;
 use nalgebra::SVector;
 use numread::NumberViewer;
 use rodio::{source::SineWave, OutputStream, Source};
-use spindle::sim::Solution;
+use spindle::game::dis_to_pos;
+use spindle::sim::{Outcome, Solution, LAYOUT};
 use spindle::{
     game::{DynamicState, PlateState},
     sim::{SimParams, SimState},
@@ -64,7 +66,7 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn write_params(&mut self, path: &str, params: SimParams) {
+    pub fn write_params(&mut self, path: &str, params: SimParams, final_vel: Option<f64>) {
         self.dynamic_acc = params.dynamic_acc;
         self.plate_acc = params.plate_acc;
         self.att = params.att;
@@ -73,6 +75,9 @@ impl Settings {
         self.end_d = params.end_d;
         self.k = params.k;
         self.dynamic_weights = params.dynamic_weights.into();
+        if let Some(final_vel) = final_vel {
+            self.min_vel = final_vel;
+        }
 
         if let Ok(str) = serde_json::to_string(self) {
             let _ = std::fs::write(path, str);
@@ -80,9 +85,49 @@ impl Settings {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Bet(Vec<u8>);
+
+impl Bet {
+    pub fn surrounding(i: u8, count: usize) -> Bet {
+        let i = i as i16;
+        let mut buf = vec![LAYOUT[i as usize]];
+        let mut dis: i16 = 1;
+        for _ in 0..(count - 1) {
+            if dis > 0 {
+                buf.push(LAYOUT[((i + dis as i16) % LAYOUT.len() as i16) as usize]);
+                dis = -dis;
+            } else {
+                let j = {
+                    if i + dis < 0 {
+                        LAYOUT.len() + (i + dis) as usize
+                    } else {
+                        (i + dis) as usize % LAYOUT.len()
+                    }
+                };
+                buf.push(LAYOUT[j]);
+                dis = -dis;
+                dis += 1;
+            }
+        }
+
+        Self(buf)
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SimRecord {
+    sln: Solution,
+    outcome: Outcome,
+    bet: Option<Bet>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Resource)]
+pub struct HistoryRes(Vec<SimRecord>);
+
 fn default_settings() -> Settings {
     Settings {
-        plate_acc: -0.00326,
+        plate_acc: -0.00396,
         dynamic_acc: -0.006,
         min_vel: 2.65,
         k: -0.0073,
@@ -108,18 +153,18 @@ fn default_settings() -> Settings {
         dynamic_pattern: vec![[0.0, -270.0], [270.0, 0.0], [0.0, 270.0], [-270.0, 0.0]],
         plate_pattern: vec![[0.0, -150.0], [150.0, 0.0], [0.0, 150.0], [-150.0, 0.0]],
         dynamic_weights: Default::default(),
-        dynamic_rect: [933, 235, 90, 50],
-        board_rect_a: [1031, 442, 85, 23],
-        board_rect_b: [1543, 432, 140, 97],
+        dynamic_rect: [903,235,120,50],
+        board_rect_a: [1031, 442, 50, 50],
+        board_rect_b: [1575, 512, 50, 50],
         board_a_point: 0.0,
         board_b_point: std::f64::consts::FRAC_PI_2,
-        board_width: 600.0,
+        board_width: 1270.0,
         autopilot_rect: [1511, 196, 89, 65],
-        autopilot_stby_col: [232, 200, 139],
+        autopilot_stby_col: [201, 181, 172],
         autopilot_trigger_col: [48, 32, 1],
-        autopilot_sensitivity: 0.1,
-        solve_vel: 9.981317008,
-        bet_vel: 6.981317008,
+        autopilot_sensitivity: 0.2,
+        solve_vel: 20.0,
+        bet_vel: 14.0,
         result_rect: [836, 817, 31, 28],
     }
 }
@@ -202,22 +247,51 @@ fn main() {
         SmartTrigger::daemon(smbb);
     });
 
+    let history_res = {
+        if let Some(x) = std::fs::read_to_string("history.json")
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+        {
+            x
+        } else {
+            HistoryRes(Vec::new())
+        }
+    };
+
     App::new()
         .add_event::<GlobalClickEvent>()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                resolution: WindowResolution::new(650., 700.).with_scale_factor_override(1.0),
+                ..default()
+            }),
+            ..default()
+        }))
         .add_plugins(OverlayPlugin {
             font_size: 18.0,
             ..default()
         })
+
         .add_systems(Startup, create_board)
-        .add_systems(Update, (input, update_plate, update_dynamic, auto_trigger))
+        .add_systems(
+            Update,
+            (
+                input,
+                update_plate,
+                update_dynamic,
+                autopilot_system,
+                auto_trigger,
+            ),
+        )
+        .add_event::<Reset>()
         .insert_resource(PeeperRes(peeper))
         .insert_resource(smart_trigger)
         .insert_resource(board_trigger)
         .insert_resource(settings)
+        .insert_resource(history_res)
+        .insert_resource(AutopilotState::Offline)
         .run();
 }
-
 
 #[derive(Component)]
 pub struct Plate;
@@ -231,10 +305,13 @@ pub struct Sim {
     plate: Option<PlateState>,
     dynamic: Option<DynamicState>,
     clockwise: bool,
-    solution: Option<Solution>
+    solution: Option<Solution>,
+    bet: Option<Bet>,
+    train_dyn: bool,
+    recorded_final_vel: Option<f64>,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Debug)]
 pub enum AutopilotState {
     InTrigger,
     AwaitingDrop,
@@ -297,6 +374,9 @@ fn create_board(mut commands: Commands, asset_server: Res<AssetServer>, settings
         dynamic: None,
         clockwise: true,
         solution: None,
+        bet: None,
+        recorded_final_vel: None,
+        train_dyn: false,
     });
     commands.insert_resource(AutoTrigger {
         dynamic_points: Vec::new(),
@@ -305,6 +385,7 @@ fn create_board(mut commands: Commands, asset_server: Res<AssetServer>, settings
         prev_down: false,
         start: None,
     });
+    commands.insert_resource(AutopilotState::Offline);
 }
 
 fn new_state(clockwise: bool, settings: &Settings) -> SimState {
@@ -338,13 +419,15 @@ fn new_state(clockwise: bool, settings: &Settings) -> SimState {
 
 fn input(
     mut commands: Commands,
+    mut reset_events: EventReader<Reset>,
     mut key_evr: EventReader<KeyboardInput>,
     mut sim: ResMut<Sim>,
     mut settings: ResMut<Settings>,
     mut trigger: ResMut<AutoTrigger>,
     mut peeper: ResMut<PeeperRes>,
-    smart_trigger: Res<TriggerRes>,
-    board_trigger: Res<BoardTriggerRes>,
+    mut smart_trigger: ResMut<TriggerRes>,
+    mut board_trigger: ResMut<BoardTriggerRes>,
+    mut ap: ResMut<AutopilotState>,
     mut set: ParamSet<(
         Query<(&Plate, &mut Transform)>,
         Query<(&mut Dynamic, &mut Transform)>,
@@ -381,6 +464,10 @@ fn input(
                     }
                     _ => {}
                 },
+                Some(KeyCode::U) => {
+                    sim.train_dyn = !sim.train_dyn;
+                    screen_print!(sec: 5.0, col: Color::YELLOW, "TRAIN DYNAMIC MODE: {}", sim.train_dyn);
+                }
                 Some(KeyCode::Y) => match trigger.state {
                     TriggerState::Idle => {
                         trigger.state = TriggerState::PatternSetup;
@@ -441,8 +528,13 @@ fn input(
                     if let TriggerState::Active = trigger.state {
                         if let Some(dy) = sim.dynamic {
                             screen_print!(sec: 5.0, col: Color::PINK, "VELOCITY: {}", dy.vel);
+                            sim.recorded_final_vel = Some(dy.vel.abs());
                         }
                     }
+                }
+                Some(KeyCode::X) => {
+                    *ap = AutopilotState::Standby;
+                    screen_print!(sec: 5.0, col: Color::ORANGE, "AUTOPILOT ENGAGED");
                 }
                 Some(KeyCode::L) => {
                     // Train the model.
@@ -456,7 +548,7 @@ fn input(
                         sim.state.plot(&sim.state.params, "before.png");
                         sim.state.params = outcome;
                         sim.state.plot(&sim.state.params, "after.png");
-                        settings.write_params("settings.json", outcome);
+                        settings.write_params("settings.json", outcome, sim.recorded_final_vel);
                     } else {
                         screen_print!(sec: 5.0, col: Color::RED, "LEARNING FAILED");
                     }
@@ -469,7 +561,7 @@ fn input(
         }
     }
 
-    if reset {
+    if reset || reset_events.read().count() > 0 {
         *settings = load_settings();
 
         commands.insert_resource(Sim {
@@ -478,9 +570,22 @@ fn input(
             dynamic: None,
             clockwise: sim.clockwise,
             solution: None,
+            bet: None,
+            recorded_final_vel: None,
+            train_dyn: false,
         });
+
         sim.plate = None;
         sim.dynamic = None;
+        sim.solution = None;
+        sim.bet = None;
+        sim.recorded_final_vel = None;
+        sim.train_dyn = false;
+
+        if reset {
+            *ap = AutopilotState::Offline;
+        }
+        
 
         for (plate, mut transform) in set.p0().iter_mut() {
             transform.translation = Vec3::ZERO;
@@ -496,55 +601,90 @@ fn input(
         trigger.state = TriggerState::Idle;
 
         peeper.0.lock().unwrap().clear();
+
+        screen_print!(col: Color::BLACK, "RESET");
     }
 }
 
-
-pub fn autopilot_system(mut ap: ResMut<AutopilotState>, mut sim: ResMut<Sim>, mut settings: ResMut<Settings>, mut trigger: ResMut<AutoTrigger>) {
+pub fn autopilot_system(
+    mut commands: Commands, 
+    mut ap: ResMut<AutopilotState>,
+    mut sim: ResMut<Sim>,
+    mut settings: ResMut<Settings>,
+    mut trigger: ResMut<AutoTrigger>,
+    mut history: ResMut<HistoryRes>,
+    mut smart_trigger: ResMut<TriggerRes>,
+    mut board_trigger: ResMut<BoardTriggerRes>,
+    mut reset_events: EventWriter<Reset>,
+    mut set: ParamSet<(
+        Query<(&Plate, &mut Transform)>,
+        Query<(&mut Dynamic, &mut Transform)>,
+    )>,
+) {
+    let mut next_state = None;
     match ap.deref() {
         AutopilotState::Standby => {
             // wait for dark rect
             if let Some(col) = average_color(settings.autopilot_rect) {
-                let tr_col = Color::rgb_u8(settings.autopilot_trigger_col[0], settings.autopilot_trigger_col[1], settings.autopilot_trigger_col[2]);
+                let tr_col = Color::rgb_u8(
+                    settings.autopilot_trigger_col[0],
+                    settings.autopilot_trigger_col[1],
+                    settings.autopilot_trigger_col[2],
+                );
 
                 let tr_vec = Vec4::from_array(tr_col.as_rgba_f32());
                 let col_vec = Vec4::from_array(col.as_rgba_f32());
 
+                screen_print!("color distance: {}", tr_vec.distance(col_vec));
                 if tr_vec.distance(col_vec) < settings.autopilot_sensitivity as f32 {
-                    // Enter trigger state.
+                    // Enter trigger state, reset any values.
+                    next_state = Some(AutopilotState::InTrigger);
                     trigger.state = TriggerState::Armed;
-                    sim.solution = None;
-                    trigger.start = Some(SystemTime::now());
-                    *ap = AutopilotState::InTrigger;
+                    std::thread::sleep(Duration::from_millis(500));
+                    smart_trigger.0.clear(); // Flush so we don't get a detection at the start.
+                    for (tr, _) in board_trigger.0.iter() {
+                        tr.clear();
+                    }
                 }
             }
         }
         AutopilotState::InTrigger => {
             // wait for solution or timeout.
             if let Some(start) = trigger.start {
-                if SystemTime::now().duration_since(start).map(|x| x < Duration::from_secs_f64(15.0)).unwrap_or(true) {
+                if SystemTime::now()
+                    .duration_since(start)
+                    .map(|x| x > Duration::from_secs_f64(15.0))
+                    .unwrap_or(true)
+                {
+                    screen_print!(sec: 5.0, col: Color::ORANGE, "Timout waiting for trigger start");
                     trigger.state = TriggerState::Idle;
-                    *ap = AutopilotState::AwaitingReset;
-                } 
+                    next_state = Some(AutopilotState::AwaitingReset);
+                }
             }
             if let Some(sln) = sim.solution {
                 if let Some(dy) = sim.dynamic {
                     if dy.vel < settings.bet_vel {
                         // Bet on solution and disarm trigger.
                         screen_print!(sec: 20.0, col: Color::CYAN, "BETTING ON: sln: {}, i: {}, n: {}", sln.plate_pos, sln.i, sln.n);
+                        let bet = Bet::surrounding(sln.i, 10);
+                        sim.bet = Some(bet);
                         trigger.state = TriggerState::Idle;
-                        *ap = AutopilotState::AwaitingDrop;
+                        next_state = Some(AutopilotState::AwaitingDrop);
                     }
                 }
             }
-
         }
         AutopilotState::AwaitingDrop => {
             if let Some(start) = trigger.start {
-                if SystemTime::now().duration_since(start).map(|x| x < Duration::from_secs_f64(20.0)).unwrap_or(true) {
+                if SystemTime::now()
+                    .duration_since(start)
+                    .map(|x| x < Duration::from_secs_f64(20.0))
+                    .unwrap_or(true)
+                {
+                    screen_print!(sec: 5.0, col: Color::ORANGE, "Timout waiting for drop");
                     trigger.state = TriggerState::Idle;
-                    *ap = AutopilotState::AwaitingReset;
-                } 
+                    next_state = Some(AutopilotState::AwaitingReset);
+                }
             }
             if sim.dynamic.is_none() {
                 let viewer = Arc::new(Mutex::new(NumberViewer::new(settings.result_rect)));
@@ -552,54 +692,144 @@ pub fn autopilot_system(mut ap: ResMut<AutopilotState>, mut sim: ResMut<Sim>, mu
                 std::thread::spawn(move || {
                     NumberViewer::daemon(viewer_cl);
                 });
-               
-                *ap = AutopilotState::AwaitingResult { viewer, overtime: false }
+
+                next_state = Some(AutopilotState::AwaitingResult {
+                    viewer,
+                    overtime: false,
+                });
             }
-        },
+        }
         AutopilotState::AwaitingResult { viewer, overtime } => {
             if let Ok(v) = viewer.try_lock() {
                 if v.changed() {
                     // Store the result
+                    let num = viewer.lock().unwrap().number();
+                    screen_print!(sec: 5.0, "Using same number due to overtime ({:?})", num);
+                    if let Some(num) = num {
+                        if let Some(sln) = sim.solution {
+                            let outcome = sln.create_outcome(num as u8);
+                            if let Some(outcome) = outcome {
+                                history.0.push(SimRecord {
+                                    sln,
+                                    outcome,
+                                    bet: sim.bet.clone(),
+                                });
+                                if let Ok(c) = serde_json::to_string(history.deref()) {
+                                    std::fs::write("history.json", c);
+                                }
+                                println!(
+                                    "Expected Returns: {:?}, Winrate: {:?}",
+                                    history.constant_bet_returns(),
+                                    history.winrate()
+                                );
+                            } else {
+                                screen_print!(sec: 5.0, col: Color::RED, "ERROR: Failed to generate outome!");
+                            }
+                        } else {
+                            screen_print!(sec: 5.0, col: Color::RED, "ERROR: No solution!");
+                        }
+                    }
+                    viewer.lock().unwrap().drop = true;
+                    next_state = Some(AutopilotState::AwaitingReset);
                 }
             }
 
             if *overtime {
                 if let Some(col) = average_color(settings.autopilot_rect) {
-                    let tr_col = Color::rgb_u8(settings.autopilot_trigger_col[0], settings.autopilot_trigger_col[1], settings.autopilot_trigger_col[2]);
-    
+                    let tr_col = Color::rgb_u8(
+                        settings.autopilot_trigger_col[0],
+                        settings.autopilot_trigger_col[1],
+                        settings.autopilot_trigger_col[2],
+                    );
+
                     let tr_vec = Vec4::from_array(tr_col.as_rgba_f32());
                     let col_vec = Vec4::from_array(col.as_rgba_f32());
-    
+
+                    // New spin, so the number must be the same as last time, hence why it has not changed.
                     if tr_vec.distance(col_vec) < settings.autopilot_sensitivity as f32 {
                         // Store existing result.
                         let num = viewer.lock().unwrap().number();
+                        screen_print!(sec: 5.0, "Using same number due to overtime ({:?})", num);
+                        if let Some(num) = num {
+                            if let Some(sln) = sim.solution {
+                                let outcome = sln.create_outcome(num as u8);
+                                if let Some(outcome) = outcome {
+                                    history.0.push(SimRecord {
+                                        sln,
+                                        outcome,
+                                        bet: sim.bet.clone(),
+                                    });
+                                    if let Ok(c) = serde_json::to_string(history.deref()) {
+                                        std::fs::write("history.json", c);
+                                    }
 
-                        if let Some(sln) = sim.solution {
-
+                                    println!(
+                                        "Expected Returns: {:?}, Winrate: {:?}",
+                                        history.constant_bet_returns(),
+                                        history.winrate()
+                                    );
+                                } else {
+                                    screen_print!(sec: 5.0, col: Color::RED, "ERROR: Failed to generate outome!");
+                                }
+                            } else {
+                                screen_print!(sec: 5.0, col: Color::RED, "ERROR: No solution!");
+                            }
                         }
 
-                        *ap = AutopilotState::Standby;
+                        viewer.lock().unwrap().drop = true;
+                        next_state = Some(AutopilotState::Standby);
+                        reset_events.send(Reset);
+                    }
+                }
+            } else {
+                if let Some(col) = average_color(settings.autopilot_rect) {
+                    let tr_col = Color::rgb_u8(
+                        settings.autopilot_stby_col[0],
+                        settings.autopilot_stby_col[1],
+                        settings.autopilot_stby_col[2],
+                    );
+
+                    let tr_vec = Vec4::from_array(tr_col.as_rgba_f32());
+                    let col_vec = Vec4::from_array(col.as_rgba_f32());
+
+                    // New spin, so the number must be the same as last time, hence why it has not changed.
+                    if tr_vec.distance(col_vec) < settings.autopilot_sensitivity as f32 {
+                        next_state = Some(AutopilotState::AwaitingResult {
+                            viewer: viewer.clone(),
+                            overtime: true,
+                        });
                     }
                 }
             }
         }
         AutopilotState::AwaitingReset => {
             if let Some(col) = average_color(settings.autopilot_rect) {
-                let tr_col = Color::rgb_u8(settings.autopilot_stby_col[0], settings.autopilot_stby_col[1], settings.autopilot_stby_col[2]);
+                let tr_col = Color::rgb_u8(
+                    settings.autopilot_stby_col[0],
+                    settings.autopilot_stby_col[1],
+                    settings.autopilot_stby_col[2],
+                );
 
                 let tr_vec = Vec4::from_array(tr_col.as_rgba_f32());
                 let col_vec = Vec4::from_array(col.as_rgba_f32());
-
+                screen_print!("color distance: {}", tr_vec.distance(col_vec));
                 if tr_vec.distance(col_vec) < settings.autopilot_sensitivity as f32 {
                     // Enter trigger state.
-                    *ap = AutopilotState::Standby;
+                    next_state = Some(AutopilotState::Standby);
+                    reset_events.send(Reset);
                 }
             }
         }
         AutopilotState::Offline => {}
     }
-}
 
+    if let Some(next_state) = next_state {
+        screen_print!(sec: 5.0, col: Color::ORANGE, "AUTOPILOT STATE: {:?}", &next_state);
+        
+        *ap = next_state;
+
+    }
+}
 
 pub fn update_plate(
     time: Res<Time>,
@@ -618,6 +848,8 @@ pub fn update_plate(
     }
 }
 
+#[derive(Event)]
+pub struct Reset;
 
 pub fn update_dynamic(
     time: Res<Time>,
@@ -626,9 +858,12 @@ pub fn update_dynamic(
 ) {
     for (mut dynamic, mut transform) in dynamics.iter_mut() {
         if let Some(f) = dynamic.0 {
-            let p = sim.plate.unwrap().dis + f;
-            transform.translation.x = R_1 * p.sin() as f32;
-            transform.translation.y = R_1 * p.cos() as f32;
+            if let Some(plate) = sim.plate {
+                let p = plate.dis + f;
+                transform.translation.x = R_1 * p.sin() as f32;
+                transform.translation.y = R_1 * p.cos() as f32;
+            }
+            
         } else {
             let ds = sim.dynamic;
             if let Some(ds) = ds {
@@ -645,11 +880,13 @@ pub fn update_dynamic(
 
                 sim.dynamic = Some(next);
 
-                if ds.vel.abs() < sim.state.params.min_vel {
+                if ds.vel.abs() < sim.state.params.min_vel && !sim.train_dyn {
                     //beep();
                     if let Some(sln) = sim.state.finalize(ds) {
                         screen_print!(sec: 20.0, col: Color::DARK_GREEN, "OUTCOME: sln: {}, i: {}, n: {}", sln.plate_pos, sln.i, sln.n);
+                        dynamic.0 = Some(sln.plate_pos)
                     }
+
                     sim.dynamic = None;
                 }
 
@@ -725,24 +962,33 @@ fn auto_trigger(
     match trigger.state {
         TriggerState::Active | TriggerState::Armed => {
             if let Some((r, t)) = smart_trigger.0.flush_detect(Duration::from_secs_f64(0.1)) {
-                screen_print!(sec: 0.2, "smart trigger click");
-                //println!("smart trigger");
-                let cap_width = settings.dynamic_rect[2];
+                if SystemTime::now().duration_since(t).unwrap() < Duration::from_secs_f64(0.2) {
 
-                let x = r.center().x as f64;
-                let offset = x - (cap_width as f64 / 2.0);
+                    screen_print!(sec: 0.2, col: Color::WHITE, "smart trigger click");
+                    //println!("smart trigger");
+                    let cap_width = settings.dynamic_rect[2];
 
-                let offset_rad = 2.0 * offset / settings.board_width;
+                    let x = r.center().x as f64;
+                    let offset = x - (cap_width as f64 / 2.0);
 
-                sim.state.dynamic_click(t, offset_rad, 1.0);
-                sim.dynamic = sim.state.dynamic_state;
+                    let offset_rad = 2.0 * offset / settings.board_width;
 
-                // Solve if vel is correct
-                if let Some(dy) = sim.dynamic {
-                    if dy.vel < settings.solve_vel {
-                        if let Some(sln) = sim.state.solve() {
-                            sim.solution = Some(sln);
-                            screen_print!(sec: 20.0, col: Color::CYAN, "sln: {}, i: {}, n: {}", sln.plate_pos, sln.i, sln.n);
+                    let pos = dis_to_pos(offset_rad);
+
+                    //println!("TR: {}", pos);
+
+                    sim.state.dynamic_click(t, pos, 1.0);
+                    sim.dynamic = sim.state.dynamic_state;
+
+                    //Solve if vel is correct
+                    if let Some(dy) = sim.dynamic {
+                        if dy.vel < settings.solve_vel {
+                            if let Some(sln) = sim.state.solve() {
+                                sim.solution = Some(sln);
+                                screen_print!(sec: 20.0, col: Color::CYAN, "sln: {}, i: {}, n: {}", sln.plate_pos, sln.i, sln.n);
+                            } else {
+                                screen_print!(sec: 2.0, col: Color::RED, "ERROR finding solution");
+                            }
                         }
                     }
                 }
@@ -774,11 +1020,13 @@ fn auto_trigger(
             // }
             for (tr, pos) in board_trigger.0.iter() {
                 if let Some((r, t)) = tr.flush_detect(Duration::from_secs_f64(0.5)) {
-                    screen_print!(sec: 0.2, "board trigger click");
-                    //println!("smart trigger");
-                    sim.state.plate_click(t, *pos, 1.0);
-                    sim.plate = sim.state.plate_state;
-                    break;
+                    if SystemTime::now().duration_since(t).unwrap() < Duration::from_secs_f64(0.2) {
+                        screen_print!(sec: 0.2, col: Color::SEA_GREEN, "board trigger click");
+                        //println!("smart trigger");
+                        sim.state.plate_click(t,  *pos, 1.0);
+                        sim.plate = sim.state.plate_state;
+                        break;
+                    }
                 }
             }
             // for (i, tp) in trigger.plate_points.iter_mut().enumerate() {
@@ -1023,3 +1271,43 @@ pub fn beep() {
     });
 }
 
+impl HistoryRes {
+    /// Assuming we bet a constant amount each time, what would be the returns given this history.
+    /// Returns (actual, expected).
+    pub fn constant_bet_returns(&self) -> (f64, f64) {
+        let mut returns = 0.0;
+        let mut expected = 0.0;
+
+        for rec in self.0.iter() {
+            if let Some(bet) = &rec.bet {
+                if bet.0.contains(&rec.outcome.n) {
+                    returns += (36.0 / (bet.0.len() as f64)) - 1.0;
+                } else {
+                    returns -= 1.0;
+                }
+                expected -= 36.0 / 37.0;
+            }
+        }
+
+        (returns, expected)
+    }
+
+    pub fn winrate(&self) -> (f64, f64) {
+        let mut wins = 0.0;
+        let mut expected = 0.0;
+
+        let mut count = 0;
+
+        for rec in self.0.iter() {
+            if let Some(bet) = &rec.bet {
+                count += 1;
+                if bet.0.contains(&rec.outcome.n) {
+                    wins += 1.0;
+                }
+                expected += bet.0.len() as f64 / 36.0;
+            }
+        }
+
+        (wins / count as f64, expected / count as f64)
+    }
+}

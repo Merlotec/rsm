@@ -1,13 +1,13 @@
-use std::sync::{Arc, Mutex};
+use std::{sync::{Arc, Mutex}, time::Duration};
 
 use autopilot::bitmap;
-
+#[derive(Debug)]
 pub struct NumberViewer {
     number: Option<u32>,
     changed: bool,
     rect: autopilot::geometry::Rect,
     active: bool,
-    drop: bool,
+    pub drop: bool,
 }
 
 impl NumberViewer {
@@ -35,7 +35,7 @@ impl NumberViewer {
             if let Ok(bmp) = bmp {
                 let img = bmp.image;
 
-                let tmp_img_path = "/tmp/tmp_img.png"; // Adjust path as needed
+                let tmp_img_path = "tmp_img.png"; // Adjust path as needed
                 img.save(tmp_img_path).expect("Failed to save temporary image");
 
                 // Use Tesseract to perform OCR
@@ -48,6 +48,8 @@ impl NumberViewer {
                     this.number = tess.get_text().ok().and_then(|x| x.parse::<u32>().ok());
 
                     this.changed = old_number != this.number;
+                } else {
+                    println!("Failed to set image!!!");
                 }
             }
         }
@@ -58,5 +60,6 @@ impl NumberViewer {
             Self::update(&this);
             std::thread::sleep(Duration::from_millis(500));
         }
+        println!("Ending numread daemon");
     }
 }

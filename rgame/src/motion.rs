@@ -268,18 +268,27 @@ impl SmartTrigger {
     // Uses mutexes and atomic operations to uupdate.
     pub fn update(&self) {
         if let Some(rect) = self.detector.lock().unwrap().detect() {
+            let t = SystemTime::now();
             let mut tr = self.trigger.lock().unwrap();
             let brect = Rect::new(rect.x as f32, rect.y as f32, (rect.x + rect.width) as f32, (rect.y + rect.height) as f32);
-            *tr.deref_mut() = Some((brect, SystemTime::now()));
+            if let Some((_, tp)) = tr.deref() {
+                if tp < &t {
+                    *tr.deref_mut() = Some((brect, t));
+                }
+            } else {
+                *tr.deref_mut() = Some((brect, t));
+            }
+            
         }
     }
 
     pub fn flush_detect(&self, buffer: Duration) -> Option<(Rect, SystemTime)> {
         let mut tr = self.trigger.lock().unwrap();
+        let mut lt = self.last_flush.lock().unwrap();
         if let Some((rect, trigger)) = tr.deref().clone() {
             *tr.deref_mut() = None;
-            if self.last_flush.lock().unwrap().map(|x| x + buffer < trigger).unwrap_or(true) {
-                let mut lt = self.last_flush.lock().unwrap();
+            
+            if lt.map(|x| x + buffer < trigger).unwrap_or(true) {
                 *lt.deref_mut() = Some(trigger);
                 Some((rect, trigger))
             } else {
@@ -298,7 +307,6 @@ impl SmartTrigger {
     pub fn daemon(this: Arc<Self>) {
         loop {
             Self::update(&this);
-            //std::thread::sleep(Duration::from_nanos(50));
         }
     }
 }
