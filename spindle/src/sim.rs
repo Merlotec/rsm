@@ -70,7 +70,7 @@ pub struct Solution {
 
 impl Solution {
     pub fn create_outcome(&self, n: u8) -> Option<Outcome> {
-        let i = *LAYOUT.iter().find(|x| **x == n)?;
+        let (i, x) = LAYOUT.iter().enumerate().find(|(i, x)| **x == n)?;
 
         let proximity = {
             let up = (i as i16 - self.i as i16) % LAYOUT.len() as i16;
@@ -86,22 +86,28 @@ impl Solution {
         let slot_displ_sl =  {
             let lpos = dis_to_pos(self.dynamic_dis - self.plate_dis);
             let i_dyn = PlateState::slot_at_local_pos(lpos, LAYOUT.len());
-            let x = ((i as i16 - i_dyn as i16) % LAYOUT.len() as i16) as u8;
-            if self.clockwise {
+            let mut x = (i as i16 - i_dyn as i16);
+            if x < 0 {
+                x = LAYOUT.len() as i16 - x
+            }
+            if !self.clockwise {
                 x
             } else {
-                LAYOUT.len() as u8 - x
+                LAYOUT.len() as i16 - x
             }
         };
 
         let abs_displ_sl =  {
             let lpos = dis_to_pos(self.dynamic_dis - self.final_plate_dis);
             let i_dyn = PlateState::slot_at_local_pos(lpos, LAYOUT.len());
-            let x = ((i as i16 - i_dyn as i16) % LAYOUT.len() as i16) as u8;
-            if self.clockwise {
+            let mut x = (i as i16 - i_dyn as i16);
+            if x < 0 {
+                x = LAYOUT.len() as i16 - x
+            }
+            if !self.clockwise {
                 x
             } else {
-                LAYOUT.len() as u8 - x
+                LAYOUT.len() as i16 - x
             }
         };
 
@@ -118,11 +124,11 @@ impl Solution {
 
         Some(Outcome {
             n,
-            i,
+            i: i as u8,
             proximity,
-            slot_displ_sl,
+            slot_displ_sl: slot_displ_sl as u8,
             abs_displ,
-            abs_displ_sl,
+            abs_displ_sl: abs_displ_sl as u8,
         })
     }
 }
@@ -224,13 +230,13 @@ impl SimState {
         }
         if self.clockwise {
             if pos_1 < pos_0 {
-                pos_1 + std::f64::consts::PI * 2.0
+                std::f64::consts::PI * 2.0 - (pos_0 - pos_1)
             } else {
                 pos_1 - pos_0
             }
         } else {
             if pos_1 > pos_0 {
-                pos_0 + (std::f64::consts::PI * 2.0 - pos_1)
+                std::f64::consts::PI * 2.0 - (pos_1 - pos_0)
             } else {
                 pos_0 - pos_1
             }
@@ -243,13 +249,13 @@ impl SimState {
         }
         if !self.clockwise {
             if pos_1 < pos_0 {
-                pos_1 + std::f64::consts::PI * 2.0
+                pos_1 + std::f64::consts::PI * 2.0 - (pos_0 - pos_1)
             } else {
                 pos_1 - pos_0
             }
         } else {
             if pos_1 > pos_0 {
-                pos_0 + (std::f64::consts::PI * 2.0 - pos_1)
+                std::f64::consts::PI * 2.0 - (pos_1  - pos_0)
             } else {
                 pos_0 - pos_1
             }
@@ -300,14 +306,15 @@ impl SimState {
     //     }
     // }
 
-    pub fn dynamic_click(&mut self, time: SystemTime, click_pos: f64, min_discount: f64) {
+    pub fn dynamic_click(&mut self, time: SystemTime, click_pos: f64, vel_discount_coef: f64, min_discount_vel: f64, dis_discount_coef: f64, min_discount_dis: f64) {
         if let Some((last, lpos, lds)) = self.dynamic_clicks.last() {
             let delta = time.duration_since(*last).unwrap().as_secs_f64();
             match self.dynamic_state {
                 Some(ds) => {
                     let d = time.duration_since(self.system_time(ds.t)).unwrap().as_secs_f64();
-                    let discount_factor = f64::max(1.0 / self.dynamic_clicks.len() as f64, min_discount);
-                    self.dynamic_state = Some(ds.update(click_pos, d, self.step, self.params.dynamic_acc, self.params.k, self.params.att, self.params.dynamic_weights, discount_factor))
+                    let dis_discount_factor = f64::max(1.0 / self.dynamic_clicks.len() as f64, min_discount_dis) * dis_discount_coef;
+                    let vel_discount_factor = f64::max(1.0 / self.dynamic_clicks.len() as f64, min_discount_vel) * vel_discount_coef;
+                    self.dynamic_state = Some(ds.update(click_pos, d, self.step, self.params.dynamic_acc, self.params.k, self.params.att, self.params.dynamic_weights, vel_discount_factor, dis_discount_factor))
                 },
                 None => {
                     let d0 = *lpos;
@@ -438,16 +445,15 @@ impl SimState {
         }
     }
 
-    // pub fn add_final_dynamic(&mut self, time: SystemTime) {
-    //     if let Some(dy) = self.dynamic_state {
-    //         let delta = self.time(time) - dy.t;
-    //         if delta > 0.0 {
-    //             let final_dis = dy.acc
-    //             let final_dy = dy.approximate(delta, self.step, self.params.dynamic_acc, self.params.k,self.params.att, self.params.dynamic_weights);
+    pub fn add_final_dynamic(&mut self, time: SystemTime) {
+        if let Some(dy) = self.dynamic_state {
+            let delta = self.time(time) - dy.t;
+            if delta > 0.0 {
+                let final_dy = dy.approximate(delta, self.step, self.params.dynamic_acc, self.params.k,self.params.att, self.params.dynamic_weights);
 
-    //         }
-    //     }
-    // }
+            }
+        }
+    }
 
     pub fn ssr_dynamic(&self, params: &SimParams, init_state: &DynamicState) -> (usize, f64, f64) {
         let mut ssr_t = 0.0;

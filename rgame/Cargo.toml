@@ -19,3 +19,4 @@ opencv = {version ="0.92.2", features = ["imgproc", "clang-runtime"]}
 scrap = "0.5.0"
 rodio = "0.19.0"
 tesseract = { versino="0.15.1"}
+enigo = "0.2.1"

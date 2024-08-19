@@ -6,6 +6,7 @@ use bevy::{
     prelude::*,
 };
 use bevy_debug_text_overlay::{screen_print, OverlayPlugin};
+use enigo::Mouse;
 use image::GenericImageView;
 use motion::SmartTrigger;
 use nalgebra::SVector;
@@ -51,10 +52,7 @@ pub struct Settings {
     plate_threshold: f32,
     dynamic_pattern: Vec<[f32; 2]>,
     plate_pattern: Vec<[f32; 2]>,
-    board_rect_a: [i32; 4],
-    board_rect_b: [i32; 4],
-    board_a_point: f64,
-    board_b_point: f64,
+    plate_rects: Vec<([i32; 4], f64)>,
     board_width: f64,
     autopilot_rect: [i32; 4],
     autopilot_stby_col: [u8; 3],
@@ -63,6 +61,8 @@ pub struct Settings {
     solve_vel: f64,
     bet_vel: f64,
     result_rect: [i32; 4],
+    heartbeat_coords: [i32; 2],
+    undo_coords: [i32; 2],
 }
 
 impl Settings {
@@ -79,7 +79,7 @@ impl Settings {
             self.min_vel = final_vel;
         }
 
-        if let Ok(str) = serde_json::to_string(self) {
+        if let Ok(str) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(path, str);
         }
     }
@@ -127,13 +127,13 @@ pub struct HistoryRes(Vec<SimRecord>);
 
 fn default_settings() -> Settings {
     Settings {
-        plate_acc: -0.00396,
+        plate_acc: -0.0027,
         dynamic_acc: -0.006,
         min_vel: 2.65,
         k: -0.0073,
         att: 2.5,
-        end_d: 1.0,
-        end_t: 2.5,
+        end_t: 0.6,
+        end_d: 1.7,
         dynamic_points: vec![
             0.0,
             std::f64::consts::FRAC_PI_2,
@@ -154,18 +154,17 @@ fn default_settings() -> Settings {
         plate_pattern: vec![[0.0, -150.0], [150.0, 0.0], [0.0, 150.0], [-150.0, 0.0]],
         dynamic_weights: Default::default(),
         dynamic_rect: [903,235,120,50],
-        board_rect_a: [1031, 442, 50, 50],
-        board_rect_b: [1575, 512, 50, 50],
-        board_a_point: 0.0,
-        board_b_point: std::f64::consts::FRAC_PI_2,
+        plate_rects: vec![([1031, 442, 80, 80], 0.0), ([1575, 512, 80, 80], std::f64::consts::FRAC_PI_2)],
         board_width: 1270.0,
-        autopilot_rect: [1511, 196, 89, 65],
+        autopilot_rect: [1386, 167, 13, 10],
         autopilot_stby_col: [201, 181, 172],
         autopilot_trigger_col: [48, 32, 1],
         autopilot_sensitivity: 0.2,
         solve_vel: 20.0,
         bet_vel: 14.0,
         result_rect: [836, 817, 31, 28],
+        heartbeat_coords: [1100, 960],
+        undo_coords: [1220, 1015],
     }
 }
 
@@ -204,9 +203,9 @@ fn main() {
         buffers: Vec::new(),
     }));
     let peeper_c = peeper.clone();
-    std::thread::spawn(move || {
-        PixelPeeper::peeper_daemon(peeper_c);
-    });
+    // std::thread::spawn(move || {
+    //     PixelPeeper::peeper_daemon(peeper_c);
+    // });
 
     let sm = Arc::new(SmartTrigger::new(motion::MotionDetector::new(
         settings.dynamic_rect[0],
@@ -220,32 +219,22 @@ fn main() {
         SmartTrigger::daemon(sm);
     });
 
-    let smba = Arc::new(SmartTrigger::new(motion::MotionDetector::new_green(
-        settings.board_rect_a[0],
-        settings.board_rect_a[1],
-        settings.board_rect_a[2],
-        settings.board_rect_a[3],
-    )));
 
-    let smbb = Arc::new(SmartTrigger::new(motion::MotionDetector::new_green(
-        settings.board_rect_b[0],
-        settings.board_rect_b[1],
-        settings.board_rect_b[2],
-        settings.board_rect_b[3],
-    )));
+    let mut plate_detectors = settings.plate_rects.iter().map(|(r, pos)| {
+        let sm = Arc::new(SmartTrigger::new(motion::MotionDetector::new_green(
+            r[0],
+            r[1],
+            r[2],
+            r[3],
+        )));
+        let sm_cl = sm.clone();
+        std::thread::spawn(move || {
+            SmartTrigger::daemon(sm_cl);
+        });
+        (sm, *pos)
+    }).collect();
 
-    let board_trigger = BoardTriggerRes(vec![
-        (smba.clone(), settings.board_a_point),
-        (smbb.clone(), settings.board_b_point),
-    ]);
-
-    std::thread::spawn(move || {
-        SmartTrigger::daemon(smba);
-    });
-
-    std::thread::spawn(move || {
-        SmartTrigger::daemon(smbb);
-    });
+    let board_trigger = BoardTriggerRes(plate_detectors);
 
     let history_res = {
         if let Some(x) = std::fs::read_to_string("history.json")
@@ -322,6 +311,19 @@ pub enum AutopilotState {
     Standby,
     AwaitingReset,
     Offline,
+}
+
+impl std::fmt::Display for AutopilotState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InTrigger => f.write_str("InTrigger"),
+            Self::AwaitingDrop => f.write_str("AwaitingDrop"),
+            Self::Standby => f.write_str("Standby"),
+            Self::AwaitingReset => f.write_str("AwaitingReset"),
+            Self::Offline => f.write_str("Offline"),
+            Self::AwaitingResult { overtime, .. } => f.write_fmt(format_args!("AwaitingResult(overtime={})", overtime)),
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -442,7 +444,7 @@ fn input(
                     sim.plate = sim.state.plate_state;
                 }
                 Some(KeyCode::D) => {
-                    sim.state.dynamic_click(SystemTime::now(), CLICK_POS, 0.3);
+                    sim.state.dynamic_click(SystemTime::now(), CLICK_POS, 0.4, 0.3, 0.7, 0.3);
                     sim.dynamic = sim.state.dynamic_state;
                 }
                 Some(KeyCode::C) => {
@@ -575,6 +577,7 @@ fn input(
             train_dyn: false,
         });
 
+        sim.state = new_state(sim.clockwise, &settings);
         sim.plate = None;
         sim.dynamic = None;
         sim.solution = None;
@@ -640,7 +643,7 @@ pub fn autopilot_system(
                     // Enter trigger state, reset any values.
                     next_state = Some(AutopilotState::InTrigger);
                     trigger.state = TriggerState::Armed;
-                    std::thread::sleep(Duration::from_millis(500));
+                    std::thread::sleep(Duration::from_millis(10));
                     smart_trigger.0.clear(); // Flush so we don't get a detection at the start.
                     for (tr, _) in board_trigger.0.iter() {
                         tr.clear();
@@ -692,7 +695,7 @@ pub fn autopilot_system(
                 std::thread::spawn(move || {
                     NumberViewer::daemon(viewer_cl);
                 });
-
+                println!("Created viewer!");
                 next_state = Some(AutopilotState::AwaitingResult {
                     viewer,
                     overtime: false,
@@ -700,11 +703,10 @@ pub fn autopilot_system(
             }
         }
         AutopilotState::AwaitingResult { viewer, overtime } => {
-            if let Ok(v) = viewer.try_lock() {
+            if let Ok(mut v) = viewer.try_lock() {
                 if v.changed() {
                     // Store the result
-                    let num = viewer.lock().unwrap().number();
-                    screen_print!(sec: 5.0, "Using same number due to overtime ({:?})", num);
+                    let num = v.number();
                     if let Some(num) = num {
                         if let Some(sln) = sim.solution {
                             let outcome = sln.create_outcome(num as u8);
@@ -714,13 +716,20 @@ pub fn autopilot_system(
                                     outcome,
                                     bet: sim.bet.clone(),
                                 });
-                                if let Ok(c) = serde_json::to_string(history.deref()) {
+                                if let Some(bet) = &sim.bet {
+                                    screen_print!(sec: 7.0, col: Color::WHITE, "OUTCOME: {}, bet succeeded: {}", outcome.n, bet.0.contains(&outcome.n));
+                                } else {
+                                    screen_print!(sec: 7.0, col: Color::WHITE, "OUTCOME: {}", outcome.n);
+                                }
+                                
+                                if let Ok(c) = serde_json::to_string_pretty(history.deref()) {
                                     std::fs::write("history.json", c);
                                 }
                                 println!(
-                                    "Expected Returns: {:?}, Winrate: {:?}",
+                                    "Expected Returns: {:?}, Winrate: {:?}, n: {}",
                                     history.constant_bet_returns(),
-                                    history.winrate()
+                                    history.winrate(),
+                                    history.0.len(),
                                 );
                             } else {
                                 screen_print!(sec: 5.0, col: Color::RED, "ERROR: Failed to generate outome!");
@@ -729,7 +738,7 @@ pub fn autopilot_system(
                             screen_print!(sec: 5.0, col: Color::RED, "ERROR: No solution!");
                         }
                     }
-                    viewer.lock().unwrap().drop = true;
+                    v.drop = true;
                     next_state = Some(AutopilotState::AwaitingReset);
                 }
             }
@@ -763,10 +772,17 @@ pub fn autopilot_system(
                                         std::fs::write("history.json", c);
                                     }
 
+                                    if let Some(bet) = &sim.bet {
+                                        screen_print!(sec: 7.0, col: Color::WHITE, "OUTCOME: {}, bet succeeded: {}", outcome.n, bet.0.contains(&outcome.n));
+                                    } else {
+                                        screen_print!(sec: 7.0, col: Color::WHITE, "OUTCOME: {}", outcome.n);
+                                    }
+
                                     println!(
-                                        "Expected Returns: {:?}, Winrate: {:?}",
+                                        "Expected Returns: {:?}, Winrate: {:?}, obs: {}",
                                         history.constant_bet_returns(),
-                                        history.winrate()
+                                        history.winrate(),
+                                        history.0.len(),
                                     );
                                 } else {
                                     screen_print!(sec: 5.0, col: Color::RED, "ERROR: Failed to generate outome!");
@@ -824,8 +840,10 @@ pub fn autopilot_system(
     }
 
     if let Some(next_state) = next_state {
-        screen_print!(sec: 5.0, col: Color::ORANGE, "AUTOPILOT STATE: {:?}", &next_state);
-        
+        screen_print!(sec: 5.0, col: Color::ORANGE, "AUTOPILOT STATE: {}", &next_state);
+        if let AutopilotState::Standby = next_state {
+            heartbeat_interaction(settings.heartbeat_coords, settings.undo_coords);
+        }
         *ap = next_state;
 
     }
@@ -843,7 +861,6 @@ pub fn update_plate(
 
             transform.rotation = Quat::from_rotation_z(-next.dis as f32);
             sim.plate = Some(next);
-            screen_print!("pdis: {}, pvel: {}", ps.dis, ps.vel);
         }
     }
 }
@@ -883,14 +900,12 @@ pub fn update_dynamic(
                 if ds.vel.abs() < sim.state.params.min_vel && !sim.train_dyn {
                     //beep();
                     if let Some(sln) = sim.state.finalize(ds) {
-                        screen_print!(sec: 20.0, col: Color::DARK_GREEN, "OUTCOME: sln: {}, i: {}, n: {}", sln.plate_pos, sln.i, sln.n);
+                        //screen_print!(sec: 20.0, col: Color::DARK_GREEN, "SOLUTION: sln: {}, i: {}, n: {}", sln.plate_pos, sln.i, sln.n);
                         dynamic.0 = Some(sln.plate_pos)
                     }
 
                     sim.dynamic = None;
                 }
-
-                screen_print!("ddis: {}, dvel: {}", ds.dis, ds.vel);
             }
         }
     }
@@ -961,7 +976,7 @@ fn auto_trigger(
 
     match trigger.state {
         TriggerState::Active | TriggerState::Armed => {
-            if let Some((r, t)) = smart_trigger.0.flush_detect(Duration::from_secs_f64(0.1)) {
+            if let Some((r, t)) = smart_trigger.0.flush_detect(Duration::from_secs_f64(0.2)) {
                 if SystemTime::now().duration_since(t).unwrap() < Duration::from_secs_f64(0.2) {
 
                     screen_print!(sec: 0.2, col: Color::WHITE, "smart trigger click");
@@ -977,7 +992,7 @@ fn auto_trigger(
 
                     //println!("TR: {}", pos);
 
-                    sim.state.dynamic_click(t, pos, 1.0);
+                    sim.state.dynamic_click(t, pos, 0.6, 0.3, 1.0, 0.8);
                     sim.dynamic = sim.state.dynamic_state;
 
                     //Solve if vel is correct
@@ -1019,7 +1034,7 @@ fn auto_trigger(
 
             // }
             for (tr, pos) in board_trigger.0.iter() {
-                if let Some((r, t)) = tr.flush_detect(Duration::from_secs_f64(0.5)) {
+                if let Some((r, t)) = tr.flush_detect(Duration::from_secs_f64(0.3)) {
                     if SystemTime::now().duration_since(t).unwrap() < Duration::from_secs_f64(0.2) {
                         screen_print!(sec: 0.2, col: Color::SEA_GREEN, "board trigger click");
                         //println!("smart trigger");
@@ -1285,7 +1300,7 @@ impl HistoryRes {
                 } else {
                     returns -= 1.0;
                 }
-                expected -= 36.0 / 37.0;
+                expected -= 1.0 - 36.0 / 37.0;
             }
         }
 
@@ -1310,4 +1325,26 @@ impl HistoryRes {
 
         (wins / count as f64, expected / count as f64)
     }
+}
+
+pub fn heartbeat_interaction(point: [i32; 2], undo_coords: [i32; 2]) {
+    std::thread::spawn(move || {
+        println!("Heartbeat");
+        // Create an instance of Enigo
+        let mut enigo = enigo::Enigo::new(&Default::default()).unwrap();
+
+        // Move the mouse to the position (x=500, y=500)
+        enigo.move_mouse(point[0], point[1], enigo::Coordinate::Abs);
+        std::thread::sleep(Duration::from_millis(5));
+
+        // Simulate a left mouse button click
+        enigo.button(enigo::Button::Left, enigo::Direction::Click);
+
+        std::thread::sleep(Duration::from_millis(500));
+
+        enigo.move_mouse(undo_coords[0], undo_coords[1], enigo::Coordinate::Abs);
+        std::thread::sleep(Duration::from_millis(5));
+
+        enigo.button(enigo::Button::Left, enigo::Direction::Click);
+    });
 }

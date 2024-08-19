@@ -128,7 +128,8 @@ impl DynamicState {
             return self;
         }
         let vabs = self.vel.abs();
-        let acc = a + k * vabs.powf(att) + vabs * w[0] + vabs.pow(2) * w[1] + vabs.pow(3) * w[2] + vabs.pow(1.5) * w[3] + vabs.abs().powf(1.75) * w[4] + vabs.abs().powf(1.125) * w[5] + vabs.powf(2.5) * w[6] + vabs.powf(3.5) * w[7]; // Approximately proportional to velocity, we don't need to be super accurate.
+        //let acc = a + k * vabs.powf(att) + vabs * w[0] + vabs.pow(2) * w[1] + vabs.pow(3) * w[2] + vabs.pow(1.5) * w[3] + vabs.abs().powf(1.75) * w[4] + vabs.abs().powf(1.125) * w[5] + vabs.powf(2.5) * w[6] + vabs.powf(3.5) * w[7]; // Approximately proportional to velocity, we don't need to be super accurate.
+        let acc = w[0] * vabs + w[1] * vabs.pow(2) + (w[2] + w[5] * vabs.sqrt()) * (((w[3] * vabs.pow(2) as f64).pow(2) + w[4]) as f64).sqrt(); // Approximately proportional to velocity, we don't need to be super accurate.
         let mut vel: f64 = self.vel + acc * dt * self.vel.signum(); // Approximating a as a constant should be close enough given small enough dt.
         let mut dis = self.dis + self.vel * dt + 0.5 * acc * dt * dt * self.vel.signum();
         if vel.is_sign_positive() != self.vel.is_sign_positive() {
@@ -148,7 +149,7 @@ impl DynamicState {
         (0..n).into_iter().fold(self, |v, _| v.predict(dt, a, k, att, w))
     }
 
-    pub fn update(self, real_pos: f64, delta: f64, approx_step: f64, a: f64, k: f64, att: f64, w: SVector<f64, 8>, discount_factor: f64) -> DynamicState {
+    pub fn update(self, real_pos: f64, delta: f64, approx_step: f64, a: f64, k: f64, att: f64, w: SVector<f64, 8>, vel_discount_factor: f64, dis_discount_factor: f64) -> DynamicState {
         let predicted = self.approximate(delta, approx_step, a, k, att, w);
 
         // Set pos to the weighted mean of predicted and real.
@@ -158,10 +159,10 @@ impl DynamicState {
 
         // the longer the distance, the less we want this to affect the approx speed. 
         // Basically scale vel affect by the proportion of this delta to the total sim time (<= 1).
-        let new_vel = predicted.vel + vel_modif * discount_factor * 0.2;
+        let new_vel = predicted.vel + vel_modif * vel_discount_factor;
 
         // Weight new and old depending on contribution of current update to the whole state.
-        let dfactor = discount_factor.sqrt();
+        let dfactor = dis_discount_factor.sqrt();
         let new_dis = predicted.dis * (1.0 - dfactor) + real_dis * dfactor;
 
         Self { dis: new_dis, vel: new_vel, acc: predicted.acc, t: self.t + delta }
