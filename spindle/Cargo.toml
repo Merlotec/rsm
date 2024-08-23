@@ -14,3 +14,4 @@ ndarray-rand = "0.15.0"
 rand = "0.8.5"
 plotters = "0.3"
 serde = {version = "1.0.208", features = ["derive"]}
+splines = { version = "4.3.1", features = ["serde"] }

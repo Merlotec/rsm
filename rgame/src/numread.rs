@@ -95,7 +95,7 @@ impl NumberViewer {
         for (x, y, pixel) in rgb_image.enumerate_pixels() {
             let col = Color::rgb_u8(pixel.0[0], pixel.0[1], pixel.0[2]);
 
-            if col.r() > 0.7 || col.g() > 0.7 {
+            if col.r() > 0.7 || (col.g() > 0.5 && col.r() < 0.2) {
                 // put white bg pixel
                 binary.put_pixel(x, y, Rgb([0, 0, 0]));
             } else {
@@ -111,8 +111,7 @@ impl NumberViewer {
             .set_image("processed_img.png").expect("Failed to set image")
             .set_variable("tessedit_char_whitelist", "0123456789").expect("Failed to set whitelist");
         
-        tess.set_page_seg_mode(tesseract::PageSegMode::PsmSingleBlock);
-    
+        tess.set_page_seg_mode(tesseract::PageSegMode::PsmSingleWord);    
         let ocr_result = tess.get_text().expect("Failed to extract text");
         // Clean up the OCR result by trimming and returning only digits
         Some(ocr_result.trim().to_string())

@@ -13,6 +13,7 @@ use nalgebra::SVector;
 use numread::NumberViewer;
 use rodio::{source::SineWave, OutputStream, Source};
 use spindle::game::dis_to_pos;
+use spindle::ml::{Dataset, MlTrainer, Prediction, Series};
 use spindle::sim::{Outcome, Solution, LAYOUT};
 use spindle::{
     game::{DynamicState, PlateState},
@@ -32,6 +33,7 @@ use std::{
 //pub mod auto;
 pub mod motion;
 pub mod numread;
+//pub mod video;
 
 #[derive(Resource, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
@@ -44,6 +46,7 @@ pub struct Settings {
     end_t: f64,
     end_d: f64,
     dynamic_rect: [i32; 4],
+    dynamic_rect_pos: f64,
     dynamic_points: Vec<f64>,
     plate_points: Vec<f64>,
     dynamic_color: [f32; 3],
@@ -53,7 +56,7 @@ pub struct Settings {
     dynamic_pattern: Vec<[f32; 2]>,
     plate_pattern: Vec<[f32; 2]>,
     plate_rects: Vec<([i32; 4], f64)>,
-    board_width: f64,
+    board_rad: f64,
     autopilot_rect: [i32; 4],
     autopilot_stby_col: [u8; 3],
     autopilot_trigger_col: [u8; 3],
@@ -127,13 +130,13 @@ pub struct HistoryRes(Vec<SimRecord>);
 
 fn default_settings() -> Settings {
     Settings {
-        plate_acc: -0.0027,
+        plate_acc: -0.00321,
         dynamic_acc: -0.006,
-        min_vel: 2.65,
+        min_vel: 2.865527103538936,
         k: -0.0073,
         att: 2.5,
         end_t: 0.6,
-        end_d: 1.7,
+        end_d: 1.3,
         dynamic_points: vec![
             0.0,
             std::f64::consts::FRAC_PI_2,
@@ -152,10 +155,23 @@ fn default_settings() -> Settings {
         plate_threshold: 0.2,
         dynamic_pattern: vec![[0.0, -270.0], [270.0, 0.0], [0.0, 270.0], [-270.0, 0.0]],
         plate_pattern: vec![[0.0, -150.0], [150.0, 0.0], [0.0, 150.0], [-150.0, 0.0]],
-        dynamic_weights: Default::default(),
-        dynamic_rect: [903,235,120,50],
-        plate_rects: vec![([1031, 442, 80, 80], 0.0), ([1575, 512, 80, 80], std::f64::consts::FRAC_PI_2)],
-        board_width: 1270.0,
+        dynamic_weights: [
+            -0.14191429165750552,
+            -0.022630863258615193,
+            0.8132336094975379,
+            -0.010149678768357285,
+            0.41897401194437256,
+            0.013894009590149026,
+            0.0007739543914794932,
+            0.0001279830932617193,
+        ],
+        dynamic_rect: [903, 235, 120, 50],
+        dynamic_rect_pos: -389.0,
+        plate_rects: vec![
+            ([1031, 442, 80, 80], 0.0),
+            ([1480, 480, 80, 80], std::f64::consts::FRAC_PI_2),
+        ],
+        board_rad: 657.0,
         autopilot_rect: [1386, 167, 13, 10],
         autopilot_stby_col: [201, 181, 172],
         autopilot_trigger_col: [48, 32, 1],
@@ -197,6 +213,35 @@ fn load_settings() -> Settings {
 }
 
 fn main() {
+    let trainer = if let Ok(s) = std::fs::read_to_string("trainer.json") {
+        serde_json::from_str(&s).unwrap_or_default()
+    } else {
+        println!("(Re)creating trainer!");
+        MlTrainer::default()
+    };
+    
+    // let agg = trainer.generate_aggregate(1.0).unwrap();
+    // agg.plot("ml_agg.png");
+
+    // let ext = agg.extrapolate_higher_deriv(vec![0.1, 0.1], 6, 1.0, 3).unwrap();
+    // ext.plot("ml_ext.png");
+
+    // trainer.plot("ml.png");
+
+    // let reshaped = trainer.reshape_aligned(-6.0, 1.0).unwrap();
+
+    // reshaped.plot("ml_al.png");
+
+    // if let Ok(ds) = reshaped.generate_aggregate(0.2) {
+    //     ds.plot("ml_agg2.png");
+    // }
+
+   
+
+    // //std::fs::write("trainer.json", serde_json::to_string_pretty(&reshaped).unwrap());
+
+    // return;
+
     let settings = load_settings();
 
     let peeper = Arc::new(Mutex::new(PixelPeeper {
@@ -219,20 +264,20 @@ fn main() {
         SmartTrigger::daemon(sm);
     });
 
-
-    let mut plate_detectors = settings.plate_rects.iter().map(|(r, pos)| {
-        let sm = Arc::new(SmartTrigger::new(motion::MotionDetector::new_green(
-            r[0],
-            r[1],
-            r[2],
-            r[3],
-        )));
-        let sm_cl = sm.clone();
-        std::thread::spawn(move || {
-            SmartTrigger::daemon(sm_cl);
-        });
-        (sm, *pos)
-    }).collect();
+    let mut plate_detectors = settings
+        .plate_rects
+        .iter()
+        .map(|(r, pos)| {
+            let sm = Arc::new(SmartTrigger::new(motion::MotionDetector::new_green(
+                r[0], r[1], r[2], r[3],
+            )));
+            let sm_cl = sm.clone();
+            std::thread::spawn(move || {
+                SmartTrigger::daemon(sm_cl);
+            });
+            (sm, *pos)
+        })
+        .collect();
 
     let board_trigger = BoardTriggerRes(plate_detectors);
 
@@ -260,7 +305,6 @@ fn main() {
             font_size: 18.0,
             ..default()
         })
-
         .add_systems(Startup, create_board)
         .add_systems(
             Update,
@@ -276,6 +320,7 @@ fn main() {
         .insert_resource(PeeperRes(peeper))
         .insert_resource(smart_trigger)
         .insert_resource(board_trigger)
+        .insert_resource(MlRes {trainer, ticker: None, prediction: None })
         .insert_resource(settings)
         .insert_resource(history_res)
         .insert_resource(AutopilotState::Offline)
@@ -300,6 +345,32 @@ pub struct Sim {
     recorded_final_vel: Option<f64>,
 }
 
+#[derive(Resource)]
+pub struct MlRes {
+    pub trainer: MlTrainer,
+    pub ticker: Option<Ticker>,
+    pub prediction: Option<(Prediction, SystemTime)>,
+}
+
+#[derive(Resource)]
+pub struct Ticker {
+    pub start: SystemTime,
+    pub ticks: Vec<f64>,
+}
+
+impl Ticker {
+    pub fn start() -> Self {
+        Self {
+            start: SystemTime::now(),
+            ticks: Vec::new(),
+        }
+    }
+
+    pub fn series(&self) -> Series {
+        self.ticks.iter().enumerate().map(|(i, t)| (*t, -std::f64::consts::PI * 2.0 * i as f64)).collect()
+    }
+}
+
 #[derive(Resource, Debug)]
 pub enum AutopilotState {
     InTrigger,
@@ -321,7 +392,9 @@ impl std::fmt::Display for AutopilotState {
             Self::Standby => f.write_str("Standby"),
             Self::AwaitingReset => f.write_str("AwaitingReset"),
             Self::Offline => f.write_str("Offline"),
-            Self::AwaitingResult { overtime, .. } => f.write_fmt(format_args!("AwaitingResult(overtime={})", overtime)),
+            Self::AwaitingResult { overtime, .. } => {
+                f.write_fmt(format_args!("AwaitingResult(overtime={})", overtime))
+            }
         }
     }
 }
@@ -387,6 +460,18 @@ fn create_board(mut commands: Commands, asset_server: Res<AssetServer>, settings
         prev_down: false,
         start: None,
     });
+
+    let trainer = if let Ok(s) = std::fs::read_to_string("trainer.json") {
+        serde_json::from_str(&s).unwrap_or_default()
+    } else {
+        MlTrainer::default()
+    };
+
+    commands.insert_resource(MlRes {
+        trainer,
+        ticker: None,
+        prediction: None,
+    });
     commands.insert_resource(AutopilotState::Offline);
 }
 
@@ -430,6 +515,7 @@ fn input(
     mut smart_trigger: ResMut<TriggerRes>,
     mut board_trigger: ResMut<BoardTriggerRes>,
     mut ap: ResMut<AutopilotState>,
+    mut ml: ResMut<MlRes>,
     mut set: ParamSet<(
         Query<(&Plate, &mut Transform)>,
         Query<(&mut Dynamic, &mut Transform)>,
@@ -444,7 +530,8 @@ fn input(
                     sim.plate = sim.state.plate_state;
                 }
                 Some(KeyCode::D) => {
-                    sim.state.dynamic_click(SystemTime::now(), CLICK_POS, 0.4, 0.3, 0.7, 0.3);
+                    sim.state
+                        .dynamic_click(SystemTime::now(), CLICK_POS, 0.4, 0.3, 0.7, 0.3);
                     sim.dynamic = sim.state.dynamic_state;
                 }
                 Some(KeyCode::C) => {
@@ -495,6 +582,10 @@ fn input(
 
                             trigger.state = TriggerState::Armed;
                             smart_trigger.0.clear(); // Flush so we don't get a detection at the start.
+                            // Start the ticker if trainimg mode.
+                            if sim.train_dyn {
+                                ml.ticker = Some(Ticker::start())
+                            }
                             for (tr, _) in board_trigger.0.iter() {
                                 tr.clear();
                             }
@@ -528,6 +619,12 @@ fn input(
                 }
                 Some(KeyCode::V) => {
                     if let TriggerState::Active = trigger.state {
+                        if let Some((pr, t)) = &ml.prediction {
+                            let delta = SystemTime::now().duration_since(*t).unwrap().as_secs_f64();
+
+                            let tx = pr.t_head + delta;
+                            screen_print!(sec: 5.0, col: Color::PINK, "TIME (tx): {}", tx);
+                        }
                         if let Some(dy) = sim.dynamic {
                             screen_print!(sec: 5.0, col: Color::PINK, "VELOCITY: {}", dy.vel);
                             sim.recorded_final_vel = Some(dy.vel.abs());
@@ -541,9 +638,26 @@ fn input(
                 Some(KeyCode::L) => {
                     // Train the model.
                     screen_print!(sec: 5.0, col: Color::BLUE, "COMMENCED LEARNING ({} clicks)", sim.state.dynamic_clicks.len());
+
+                    // ML learning
+                    if let Some(ticker) = &ml.ticker {
+                        let series = ticker.series();
+                        println!("Series: {:?}", &series);
+                        if let Err(e) = ml.trainer.add_series_aligned(series, 1.0) {
+                            screen_print!(sec: 5.0, col: Color::RED, "ERROR: Failed to perform ML learning: {}", e);
+                        } else {
+                            if let Ok(s) = serde_json::to_string_pretty(&ml.trainer) {
+                                let _ = std::fs::write("trainer.json", &s);
+                            }
+                            ml.trainer.plot("ml.png");
+                        }
+                    }
+                    
+
+
                     let old_k = sim.state.params.k;
                     let old_att = sim.state.params.att;
-                    let outcome = sim.state.train(0.5, 600, 0.4, 0.01, 0.05);
+                    let outcome = sim.state.train(1.0, 1000, 0.4, 0.01, 0.05);
 
                     if let Some(outcome) = outcome {
                         screen_print!(sec: 5.0, col: Color::BLUE, "LEARNING COMPLETE");
@@ -585,10 +699,12 @@ fn input(
         sim.recorded_final_vel = None;
         sim.train_dyn = false;
 
+        ml.ticker = None;
+        ml.prediction = None;
+
         if reset {
             *ap = AutopilotState::Offline;
         }
-        
 
         for (plate, mut transform) in set.p0().iter_mut() {
             transform.translation = Vec3::ZERO;
@@ -610,7 +726,7 @@ fn input(
 }
 
 pub fn autopilot_system(
-    mut commands: Commands, 
+    mut commands: Commands,
     mut ap: ResMut<AutopilotState>,
     mut sim: ResMut<Sim>,
     mut settings: ResMut<Settings>,
@@ -721,7 +837,7 @@ pub fn autopilot_system(
                                 } else {
                                     screen_print!(sec: 7.0, col: Color::WHITE, "OUTCOME: {}", outcome.n);
                                 }
-                                
+
                                 if let Ok(c) = serde_json::to_string_pretty(history.deref()) {
                                     std::fs::write("history.json", c);
                                 }
@@ -845,7 +961,6 @@ pub fn autopilot_system(
             heartbeat_interaction(settings.heartbeat_coords, settings.undo_coords);
         }
         *ap = next_state;
-
     }
 }
 
@@ -871,40 +986,52 @@ pub struct Reset;
 pub fn update_dynamic(
     time: Res<Time>,
     mut sim: ResMut<Sim>,
+    ml: Res<MlRes>,
     mut dynamics: Query<(&mut Dynamic, &mut Transform)>,
 ) {
     for (mut dynamic, mut transform) in dynamics.iter_mut() {
-        if let Some(f) = dynamic.0 {
-            if let Some(plate) = sim.plate {
-                let p = plate.dis + f;
-                transform.translation.x = R_1 * p.sin() as f32;
-                transform.translation.y = R_1 * p.cos() as f32;
+        if let Some((pr, start)) = &ml.prediction {
+            
+            let t = SystemTime::now().duration_since(*start).unwrap().as_secs_f64() + pr.t_head;
+            let dis = pr.zero_dis(t);
+            if let Some(dis) = dis {
+                screen_print!(sec: 0.2, col: Color::INDIGO, "ML PREDICTION: {} {}", t, dis);
+                transform.translation.x = R * dis.sin() as f32;
+                transform.translation.y = R * dis.cos() as f32;
             }
             
         } else {
-            let ds = sim.dynamic;
-            if let Some(ds) = ds {
-                let next = ds.approximate(
-                    time.delta_seconds() as f64,
-                    sim.state.step,
-                    sim.state.params.dynamic_acc,
-                    sim.state.params.k,
-                    sim.state.params.att,
-                    sim.state.params.dynamic_weights,
-                );
-                transform.translation.x = R * next.dis.sin() as f32;
-                transform.translation.y = R * next.dis.cos() as f32;
-
-                sim.dynamic = Some(next);
-
-                if ds.vel.abs() < sim.state.params.min_vel && !sim.train_dyn {
-                    //beep();
-                    if let Some(sln) = sim.state.finalize(ds) {
-                        //screen_print!(sec: 20.0, col: Color::DARK_GREEN, "SOLUTION: sln: {}, i: {}, n: {}", sln.plate_pos, sln.i, sln.n);
-                        dynamic.0 = Some(sln.plate_pos)
+            if let Some(f) = dynamic.0 {
+                if let Some(plate) = sim.plate {
+                    let p = plate.dis + f;
+                    transform.translation.x = R_1 * p.sin() as f32;
+                    transform.translation.y = R_1 * p.cos() as f32;
+                }
+            } else {
+                let ds = sim.dynamic;
+                if let Some(ds) = ds {
+                    let next = ds.approximate(
+                        time.delta_seconds() as f64,
+                        sim.state.step,
+                        sim.state.params.dynamic_acc,
+                        sim.state.params.k,
+                        sim.state.params.att,
+                        sim.state.params.dynamic_weights,
+                    );
+                    transform.translation.x = R * next.dis.sin() as f32;
+                    transform.translation.y = R * next.dis.cos() as f32;
+    
+                    sim.dynamic = Some(next);
+    
+                    if ds.vel.abs() < sim.state.params.min_vel && !sim.train_dyn {
+                        //beep();
+                        if let Some(sln) = sim.state.finalize(ds.t, ds.dis) {
+                            //screen_print!(sec: 20.0, col: Color::DARK_GREEN, "SOLUTION: sln: {}, i: {}, n: {}", sln.plate_pos, sln.i, sln.n);
+                            dynamic.0 = Some(sln.plate_pos)
+                        }
+    
+                        sim.dynamic = None;
                     }
-
-                    sim.dynamic = None;
                 }
             }
         }
@@ -958,6 +1085,7 @@ fn auto_trigger(
     mut peeper: ResMut<PeeperRes>,
     mut smart_trigger: ResMut<TriggerRes>,
     mut board_trigger: ResMut<BoardTriggerRes>,
+    mut ml: ResMut<MlRes>,
     settings: Res<Settings>,
 ) {
     use device_query::MouseState;
@@ -978,31 +1106,88 @@ fn auto_trigger(
         TriggerState::Active | TriggerState::Armed => {
             if let Some((r, t)) = smart_trigger.0.flush_detect(Duration::from_secs_f64(0.2)) {
                 if SystemTime::now().duration_since(t).unwrap() < Duration::from_secs_f64(0.2) {
-
                     screen_print!(sec: 0.2, col: Color::WHITE, "smart trigger click");
                     //println!("smart trigger");
-                    let cap_width = settings.dynamic_rect[2];
 
-                    let x = r.center().x as f64;
-                    let offset = x - (cap_width as f64 / 2.0);
+                    if ml.ticker.is_none() {
+                        let cap_width = settings.dynamic_rect[2];
 
-                    let offset_rad = 2.0 * offset / settings.board_width;
+                        let p = r.center().x as f64;
 
-                    let pos = dis_to_pos(offset_rad);
+                        let x = settings.dynamic_rect_pos + p;
 
-                    //println!("TR: {}", pos);
+                        let r = settings.board_rad;
 
-                    sim.state.dynamic_click(t, pos, 0.6, 0.3, 1.0, 0.8);
-                    sim.dynamic = sim.state.dynamic_state;
+                        let a = (x / r).acos();
 
-                    //Solve if vel is correct
-                    if let Some(dy) = sim.dynamic {
-                        if dy.vel < settings.solve_vel {
-                            if let Some(sln) = sim.state.solve() {
-                                sim.solution = Some(sln);
-                                screen_print!(sec: 20.0, col: Color::CYAN, "sln: {}, i: {}, n: {}", sln.plate_pos, sln.i, sln.n);
-                            } else {
-                                screen_print!(sec: 2.0, col: Color::RED, "ERROR finding solution");
+                        let c = settings.dynamic_rect_pos + (settings.dynamic_rect[3] / 2) as f64;
+
+                        let ac = (c / r).acos();
+
+                        let rel_a = a - ac;
+
+                        //println!("TR: {}", pos);
+                        
+                        if sim.train_dyn {
+                            sim.state.dynamic_click(t, rel_a, 0.2, 0.2, 1.0, 1.0);
+                        } else {
+                            sim.state.dynamic_click(t, rel_a, 0.6, 0.5, 0.8, 0.8);
+                        }
+
+                        sim.dynamic = sim.state.dynamic_state;
+
+                        //Solve if vel is correct
+                        if let Some(dy) = sim.dynamic {
+                            if dy.vel < settings.solve_vel {
+                                if let Some(sln) = sim.state.solve() {
+                                    sim.solution = Some(sln);
+                                    screen_print!(sec: 20.0, col: Color::CYAN, "sln: {}, i: {}, n: {}", sln.plate_pos, sln.i, sln.n);
+                                } else {
+                                    screen_print!(sec: 2.0, col: Color::RED, "ERROR finding solution");
+                                }
+                            }
+                        }
+                    }
+
+                    let mut start = None;
+
+                    let pr_is_none = ml.prediction.is_none();
+
+                    if let Some(ticker) = &mut ml.ticker {
+                        let now = t;
+                        let tx = now.duration_since(ticker.start).unwrap().as_secs_f64();
+                        ticker.ticks.push(tx);
+                        if pr_is_none && ticker.ticks.len() >= 3 {
+                            let t0= ticker.ticks[ticker.ticks.len() - 2];
+
+                            if tx - t0 > 1.0 {
+                                start = Some(now);
+                            }
+                        }
+
+                        //if ticker.
+                        
+                    }
+                    
+
+                    if let Some(start) = start {
+                        let series = ml.ticker.as_ref().unwrap().series();
+                        if let Ok(ds) = ml.trainer.generate_aggregate(1.0) {
+                            if let Ok(ds) = ds.extrapolate_higher_deriv(vec![0.1, 0.1], 6, 1.0, 3) {
+                                if let Ok(pr) = ds.predict(series) {
+                                    Dataset::plot_series(&[&pr.path.series, &pr.head], "sln.png");
+                                     // Calculate solution!!
+                                     if let Some(sln) = sim.state.finalize(sim.state.time(start + Duration::from_secs_f64(pr.t_end - pr.t_head)), pr.x_end) {
+                                        screen_print!(sec: 20.0, col: Color::CYAN, "sln: {}, i: {}, n: {}", sln.plate_pos, sln.i, sln.n);
+                                        sim.solution = Some(sln);
+                                    } else {
+                                        screen_print!(sec: 2.0, col: Color::RED, "ERROR finding solution");
+                                    }
+                                    ml.prediction = Some((pr, start));
+                                } else {
+                                    println!("Failed to predict!!!");
+                                    println!("Failed to predict!!!");
+                                }
                             }
                         }
                     }
@@ -1038,7 +1223,7 @@ fn auto_trigger(
                     if SystemTime::now().duration_since(t).unwrap() < Duration::from_secs_f64(0.2) {
                         screen_print!(sec: 0.2, col: Color::SEA_GREEN, "board trigger click");
                         //println!("smart trigger");
-                        sim.state.plate_click(t,  *pos, 1.0);
+                        sim.state.plate_click(t, *pos, 1.0);
                         sim.plate = sim.state.plate_state;
                         break;
                     }
@@ -1319,7 +1504,7 @@ impl HistoryRes {
                 if bet.0.contains(&rec.outcome.n) {
                     wins += 1.0;
                 }
-                expected += bet.0.len() as f64 / 36.0;
+                expected += bet.0.len() as f64 / 37.0;
             }
         }
 

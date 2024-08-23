@@ -136,6 +136,8 @@ impl MotionDetector {
             )
             .unwrap();
 
+            
+
             // Find contours of the movement
             let mut contours = VectorOfMat::new();
             imgproc::find_contours(
@@ -158,6 +160,7 @@ impl MotionDetector {
                 //     "Movement detected at region: x={}, y={}, width={}, height={}",
                 //     rect.x, rect.y, rect.width, rect.height
                 // );
+                //opencv::imgcodecs::imwrite("dyn_frame.png", &thresh, &opencv::core::Vector::new()).unwrap();
                 self.previous_time = Some(Instant::now());
                 return Some(rect);
             }

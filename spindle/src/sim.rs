@@ -2,7 +2,7 @@ use std::time::{SystemTime, Duration};
 
 use nalgebra::{ComplexField, SVector, VectorN};
 
-use crate::game::*;
+use crate::{game::*, ml::Series};
 
 pub const LAYOUT: [u8; 37] = [
     0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20,
@@ -40,9 +40,9 @@ pub struct SimParams {
 
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Solution {
-    pub i: u8,
-
     pub n: u8,
+
+    pub i: u8,
 
     pub plate_pos: f64,
 
@@ -52,9 +52,6 @@ pub struct Solution {
     
     /// Position of the ball when it falls off the circle.
     pub dynamic_dis: f64,
-
-    /// The velocity of the ball when it falls of the circle.
-    pub dynamic_vel: f64,
 
     /// Position of the plate when the ball falls off the circle.
     pub plate_dis: f64,
@@ -220,7 +217,7 @@ impl SimState {
         }
     }
 
-    fn time(&self, st: SystemTime) -> f64 {
+    pub fn time(&self, st: SystemTime) -> f64 {
         st.duration_since(self.start).unwrap().as_secs_f64()
     }
 
@@ -264,6 +261,9 @@ impl SimState {
 
     pub fn plate_click(&mut self, time: SystemTime, click_pos: f64, min_discount: f64) {
         if let Some((last, lpos, lps)) = self.plate_clicks.last() {
+            if time < *last {
+                return;
+            }
             let delta = time.duration_since(*last).unwrap().as_secs_f64();
             match self.plate_state {
                 Some(ps) => {
@@ -272,9 +272,10 @@ impl SimState {
                     self.plate_state = Some(ps.update(click_pos, d, self.step, discount_factor))
                 },
                 None => {
-                    let av = self.plate_dis(*lpos, click_pos) / delta;
+                    let pd = self.plate_dis(*lpos, click_pos);
+                    let av = pd / delta;
                     let v_end: f64 = av + self.params.plate_acc * delta * 0.5;
-                    println!("av: {}, v_end: {}", av, v_end);
+                    println!("av: {}, v_end: {}, dis: {}, delta: {}", av, v_end, pd, delta);
                     self.plate_state = Some(PlateState::new(self.time(time), click_pos, v_end * self.directional_plate(), self.params.plate_acc))
                 },
             }
@@ -378,12 +379,12 @@ impl SimState {
     pub fn solve(&self) -> Option<Solution> {
         // Find when velocity drops below min.
         let ds = self.dynamic_state?.solve(self.params.min_vel, self.step, self.params.dynamic_acc, self.params.k, self.params.att, self.params.dynamic_weights)?;
-        self.finalize(ds)
+        self.finalize(ds.t, ds.dis)
     }
 
-    pub fn finalize(&self, ds: DynamicState) -> Option<Solution> {
-        let final_pos = dis_to_pos(ds.dis + self.directional_end_d());
-        let final_t = ds.t + self.params.end_t;
+    pub fn finalize(&self, t: f64, dis: f64) -> Option<Solution> {
+        let final_pos = dis_to_pos(dis + self.directional_end_d());
+        let final_t = t + self.params.end_t;
         let delta = final_t - self.plate_state?.t;
         if delta > 0.0 {
             let ps = self.plate_state?.approximate(delta, self.step); 
@@ -393,8 +394,7 @@ impl SimState {
             Some(Solution {
                 i: i as u8,
                 n,
-                dynamic_dis: ds.dis,
-                dynamic_vel: ds.vel,
+                dynamic_dis: dis,
                 plate_dis: self.plate_state?.dis,
                 final_plate_dis: ps.dis,
                 plate_vel: self.plate_state?.vel,
@@ -453,6 +453,17 @@ impl SimState {
 
             }
         }
+    }
+
+    pub fn dynamic_series(&self) -> Series {
+        self.dynamic_clicks.iter().map(|(st, pos, state)| {
+            let t = self.time(*st);
+            if let Some(state) = state {
+                (t, state.dis)
+            } else {
+                (t, *pos)
+            }
+        }).collect()
     }
 
     pub fn ssr_dynamic(&self, params: &SimParams, init_state: &DynamicState) -> (usize, f64, f64) {

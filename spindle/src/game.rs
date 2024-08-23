@@ -129,7 +129,10 @@ impl DynamicState {
         }
         let vabs = self.vel.abs();
         //let acc = a + k * vabs.powf(att) + vabs * w[0] + vabs.pow(2) * w[1] + vabs.pow(3) * w[2] + vabs.pow(1.5) * w[3] + vabs.abs().powf(1.75) * w[4] + vabs.abs().powf(1.125) * w[5] + vabs.powf(2.5) * w[6] + vabs.powf(3.5) * w[7]; // Approximately proportional to velocity, we don't need to be super accurate.
-        let acc = w[0] * vabs + w[1] * vabs.pow(2) + (w[2] + w[5] * vabs.sqrt()) * (((w[3] * vabs.pow(2) as f64).pow(2) + w[4]) as f64).sqrt(); // Approximately proportional to velocity, we don't need to be super accurate.
+        let dyacc: f64 = w[0] * vabs + w[1] * vabs.pow(2) + w[6] * vabs.powf(1.5) + w[7] * vabs.powf(2.5) + (w[2] + w[5] * vabs.powf(0.5)) * (((w[3] * vabs.pow(2) as f64).pow(2) + w[4].abs()) as f64).sqrt(); // Approximately proportional to velocity, we don't need to be super accurate.
+        let acc = -a.abs() + dyacc.max(0.0);
+        //let acc = w[0] * vabs + w[1] * vabs.pow(2) + w[2] * vabs.powf(1.5) + w[7] * std::f64::EPSILON.powf(w[3] + w[4] * vabs) + w[5] * vabs.pow(3); // Approximately proportional to velocity, we don't need to be super accurate.
+
         let mut vel: f64 = self.vel + acc * dt * self.vel.signum(); // Approximating a as a constant should be close enough given small enough dt.
         let mut dis = self.dis + self.vel * dt + 0.5 * acc * dt * dt * self.vel.signum();
         if vel.is_sign_positive() != self.vel.is_sign_positive() {

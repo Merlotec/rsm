@@ -1,6 +1,8 @@
 pub mod game;
 pub mod sim;
 pub mod bb;
+pub mod ml;
+pub mod opt;
 //pub mod nn;
 
 pub fn add(left: usize, right: usize) -> usize {
