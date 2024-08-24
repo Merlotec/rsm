@@ -1,5 +1,7 @@
 use std::{io, ops::Range, path::Path, time::SystemTime};
 
+use num_traits::Zero;
+use serde::{Deserialize, Serialize};
 use splines::{Key, Spline};
 
 pub type Series = Vec<(f64, f64)>;
@@ -165,7 +167,7 @@ impl Dataset {
         Ok(self)
     }
 
-    pub fn extrapolate_higher_deriv(mut self, mut higer_derivatives: Vec<f64>, take: usize, delta_t: f64, n: usize) -> Result<Self, MlError> {
+    pub fn extrapolate_higher_deriv(mut self, mut higer_derivatives: Vec<f64>, take: usize, delta_t: f64, end_t: f64) -> Result<Self, MlError> {
 
         let mut m = 0.0;
         let mut n = 0;
@@ -182,8 +184,13 @@ impl Dataset {
         higer_derivatives.insert(0, m_star);
 
         let mut dstate: Vec<f64> = higer_derivatives;
+        if end_t - t < 0.0 {
+            return Ok(self)
+        }
 
-        for _ in 0..n {
+        let extrapolate_n = ((end_t - t) / delta_t) as usize;
+
+        for _ in 0..extrapolate_n + 1 {
             t += delta_t;
             for o in 0..dstate.len() - 1 {
                 let o = dstate.len() - o - 1;
@@ -198,15 +205,14 @@ impl Dataset {
         Ok(self)
     }
 
-    pub fn predict(&self, head: Series) -> Result<Prediction, MlError> {
+    pub fn predict(&self, head: Series, t_end: f64, x0: f64) -> Result<Prediction, MlError> {
         let end_t = head.last().ok_or(MlError::InsufficientData)?.0;
         let offset_t = -end_t;
         let shifted_head: Series = head.into_iter().map(|(t, x)| (t + offset_t, x)).collect();
         let align = self.align(&shifted_head, 0.0, 1.0, 60).ok_or(MlError::NoAlignment)?;
         let aligned_head: Series = shifted_head.into_iter().map(|(t, x)| (t + align.t, x + align.x)).collect();
         let t_head = aligned_head.last().ok_or(MlError::InsufficientData)?.0;
-        let t_end = self.series.last().ok_or(MlError::InsufficientData)?.0;
-        let x_end = self.series.last().ok_or(MlError::InsufficientData)?.1;
+        let x_end = self.sample(t_end).ok_or(MlError::InsufficientData)? - self.sample(t_head).ok_or(MlError::InsufficientData)? + x0;
         Ok(Prediction {  t_head, head: aligned_head, path: self.clone(), t_end, x_end })
     }
 
@@ -381,9 +387,9 @@ impl Dataset {
             let m0 = tangents[i] * h;
             let m1 = tangents[i + 1] * h;
     
-            keys.push(Key::new(t0, v0, splines::Interpolation::Linear));
+            keys.push(Key::new(t0, v0, splines::Interpolation::CatmullRom));
         }
-    
+
         Some(Spline::from_vec(keys))
     }
 
@@ -539,8 +545,47 @@ impl Dataset {
         }
     }
 
-    pub fn plot(&self, path: &str) {
-        Self::plot_series(&[&self.series], path)
+    pub fn plot(&self, plot_spline: bool, path: &str) {
+        let series = &self.series;
+        // t is increasing.
+        let max_t = series.last().unwrap().0.max(series.first().unwrap().0);
+        let min_t = series.first().unwrap().0.min(series.last().unwrap().0);
+        // since x is decreasing.
+        let max_x = series.last().unwrap().1.max(series.first().unwrap().1);
+        let min_x = series.last().unwrap().1.min(series.first().unwrap().1);
+        
+        use plotters::prelude::*;
+        let root = BitMapBackend::new(path, (640, 480)).into_drawing_area();
+        root.fill(&WHITE).unwrap();
+
+        let mut chart = ChartBuilder::on(&root)
+            .caption("ML Trainer", ("sans-serif", 50).into_font())
+            .margin(10)
+            .x_label_area_size(30)
+            .y_label_area_size(30)
+            .build_cartesian_2d(min_t - 1.0..max_t + 1.0, min_x - 1.0..max_x + 1.0).unwrap();
+
+        chart.configure_mesh().draw().unwrap();
+        
+        chart.draw_series(
+            series.iter().map(|(t, x)| Circle::new((*t, *x), 2, BLUE))
+        ).unwrap();
+    
+        if plot_spline {
+            let n: usize = ((max_t - min_t) / 0.2) as usize;
+            chart.draw_series(LineSeries::new((0..n ).filter_map(|d| {
+                let tx = min_t + 0.2 * d as f64;
+                let v = self.spline.sample(tx);
+                if let Some(v) = v{
+                    Some((tx, v))
+                } else {
+                    None
+                }
+            }), BLACK)).unwrap();
+        }
+
+        root.present().unwrap();
+        
 
     }
 
@@ -631,8 +676,25 @@ impl MlTrainer {
         
     // }
     
-    pub fn reshape(self, v_star: f64) -> Result<Self, MlError> {
+    pub fn reshape(mut self, v_star: f64) -> Result<Self, MlError> {
         let mut reshaped = Self::new(v_star);
+        let mut dmax = 0.0;
+        let mut max: Option<Dataset> = None;
+        self.datasets.retain_mut(|x| {
+            if let Some(dt) = x.delta_t() {
+                if dt > dmax {
+                    dmax = dt;
+                    max = Some(x.clone());
+                    false
+                } else {
+                    true
+                }
+            } else{
+                false
+            }
+            
+        });
+        reshaped.add_series(max.ok_or(MlError::InsufficientData)?.series)?;
         for set in self.datasets {
             reshaped.add_series(set.series)?;
         }
@@ -663,12 +725,66 @@ impl MlTrainer {
         }
     }
 
+    pub fn predict_weighted(&self, t: f64, weights: &[MlWeights]) -> Option<f64> {
+
+        let mut den = 0.0;
+        let mut sum = 0.0;
+        for weight in weights {
+            for (i, w) in &weight.0 {
+                if let Some(set) = self.datasets.get(*i) {
+                    if let Some(v) = set.sample(t) {
+                        sum += v * w;
+                        den += w;
+                    }
+                }
+            }
+        }
+        if den > 0.0 {
+            Some(sum / den) 
+        } else {
+            None
+        }
+    }
+
+    pub fn weights(&self, series: Series, take: usize) -> Option<MlWeights> {
+        let aligned_v = Dataset::new_aligned(series, self.v_star).ok()?;
+        let mut errored: Vec<(usize, f64)> = self.datasets.iter().enumerate().filter_map(|(i, ds)| {
+            if let Some(align) = ds.align(&aligned_v.series, 0.0, 1.0, 40) {
+                if align.err.is_finite() {
+                    Some((i, 1.0 / (align.err.abs() + 1.0)))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }).collect();
+
+        errored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        Some(MlWeights(errored.into_iter().take(take).collect()))
+    }
+
     pub fn generate_aggregate(&self, step: f64) -> Result<Dataset, MlError> {
         let range = self.range_t().ok_or(MlError::InsufficientData)?;
         let mut t = range.start;
         let mut agg_series = Series::new();
         while t < range.end {
             if let Some(x) = self.predict_aggregate(t) {
+                agg_series.push((t, x))
+            } 
+            t += step;
+        }
+
+        Dataset::new_aligned(agg_series, self.v_star)
+    }
+
+    pub fn generate_weighted(&self, step: f64, weights: &[MlWeights]) -> Result<Dataset, MlError> {
+        let range = self.range_t().ok_or(MlError::InsufficientData)?;
+        let mut t = range.start;
+        let mut agg_series = Series::new();
+        while t < range.end {
+            if let Some(x) = self.predict_weighted(t, weights) {
                 agg_series.push((t, x))
             } 
             t += step;
@@ -773,3 +889,7 @@ fn test_search() {
 
     println!("{:?}", v_star.unwrap());
 }
+
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MlWeights(pub Vec<(usize, f64)>);
