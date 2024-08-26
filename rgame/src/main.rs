@@ -238,19 +238,19 @@ fn main() {
 
     // let mut reshaped = trainer.reshape_aligned(-6.0, 1.0).unwrap();
 
-    // reshaped.plot("ml_al.png");
+    // reshaped.plot("ml_rs.png");
 
     // if let Ok(ds) = reshaped.generate_aggregate(0.2) {
     //     ds.plot(true, "ml_agg2.png");
     // }
 
-    // reshaped.datasets.retain(|ds| {
-    //     if ds.series.last().unwrap().0 > 10.0 {
-    //         false
-    //     } else {
-    //         true
+    // for ds in reshaped.datasets.iter_mut() {
+    //     if let Some(last) = ds.series.last() {
+    //         if let Ok(hdd) = ds.clone().extrapolate_higher_deriv(vec![0.1, 0.1], 2, 1.0, last.0 + 2.0) {
+    //             *ds = hdd;
+    //         }
     //     }
-    // });
+    // }
 
     // std::fs::write("trainer.json", serde_json::to_string_pretty(&reshaped).unwrap());
 
@@ -415,7 +415,6 @@ impl Ticker {
         }
 
         let deltas: Vec<f64> = (0..series.len() - 1).map(|i| series[i+1].0 - series[i].0).collect();
-        println!("DELTAS: {:?}", &deltas);
         for i in 0..deltas .len() - 1 {
             if deltas[i+1] < deltas[i] {
                 return None;
@@ -775,15 +774,25 @@ fn input(
                     settings.write("settings.json");
                     
                 }
-                if let Err(e) = ml.trainer.add_series_aligned(series, 1.0) {
-                    screen_print!(sec: 5.0, col: Color::RED, "TRAINING FAILED: {}", e);
-                } else {
-                    if let Ok(s) = serde_json::to_string_pretty(&ml.trainer) {
-                        let _ = std::fs::write("trainer.json", &s);
+
+                if let Some(last) = series.last().cloned() {
+                    if let Ok(hdd) = Dataset::new_aligned(series, ml.trainer.v_star) {
+                        if let Ok(hdd) = hdd.extrapolate_higher_deriv(vec![0.1, 0.1], 2, 1.0, last.0 + 2.0) {
+                            if let Err(e) = ml.trainer.add_series_aligned(hdd.series, 1.0) {
+                                screen_print!(sec: 5.0, col: Color::RED, "TRAINING FAILED: {}", e);
+                            } else {
+                                if let Ok(s) = serde_json::to_string_pretty(&ml.trainer) {
+                                    let _ = std::fs::write("trainer.json", &s);
+                                }
+                                ml.trainer.plot("ml.png");
+                                screen_print!(sec: 5.0, col: Color::PINK, "TRAINING SUCCEEDED");
+                            }
+                        } else {
+                            screen_print!(sec: 5.0, col: Color::RED, "TRAINING FAILED - EXTRAPOLATION ERROR");
+                        }
                     }
-                    ml.trainer.plot("ml.png");
-                    screen_print!(sec: 5.0, col: Color::PINK, "TRAINING SUCCEEDED");
                 }
+             
                 
             } else {
                 screen_print!(sec: 5.0, col: Color::RED, "TRAINING FAILED - UNCLEAN");
@@ -1333,16 +1342,16 @@ fn auto_trigger(
                     if let Some(start) = start {
                         let series = ml.ticker.as_ref().unwrap().series();
 
-                        let agg = if ml.weights.len() > 5 {
-                            ml.trainer.generate_weighted(1.0, &ml.weights)
+                        let agg = if ml.weights.len() >= 2 {
+                            ml.trainer.generate_weighted(0.2, &ml.weights)
                         } else {
-                            ml.trainer.generate_aggregate(1.0)
+                            ml.trainer.generate_aggregate(0.2)
                         };
 
                         if let Ok(ds) = agg {
                             let te = ds.series.last().unwrap().0;
                             if let Ok(eds) = ds.extrapolate_higher_deriv(vec![0.1, 0.1], 6, 1.0, 12.0) {
-                                match eds.predict(series, 9.5, 0.0) {
+                                match eds.predict(series, 8.0, 0.0) {
                                     Ok(pr) => {
                                         println!("te: {}, t_end: {}", te, pr.t_end);
                                         Dataset::plot_series(&[&pr.path.series, &pr.head], "sln.png");

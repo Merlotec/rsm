@@ -387,7 +387,7 @@ impl Dataset {
             let m0 = tangents[i] * h;
             let m1 = tangents[i + 1] * h;
     
-            keys.push(Key::new(t0, v0, splines::Interpolation::CatmullRom));
+            keys.push(Key::new(t0, v0, splines::Interpolation::Linear));
         }
 
         Some(Spline::from_vec(keys))
