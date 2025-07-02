@@ -1,11 +1,22 @@
 use bevy::math::Rect;
 use opencv::{
-    boxed_ref::BoxedRef, core::{Mat, Mat_AUTO_STEP, Scalar, Size, BORDER_DEFAULT}, imgproc::{self, CHAIN_APPROX_SIMPLE, COLOR_BGR2GRAY, COLOR_BGR2HSV, RETR_EXTERNAL, THRESH_BINARY}, prelude::*, types::VectorOfMat, videoio::VideoCapture
+    boxed_ref::BoxedRef,
+    core::{AlgorithmHint, Mat, Mat_AUTO_STEP, Scalar, Size, BORDER_DEFAULT},
+    imgproc::{
+        self, CHAIN_APPROX_SIMPLE, COLOR_BGR2GRAY, COLOR_BGR2HSV, RETR_EXTERNAL, THRESH_BINARY,
+    },
+    prelude::*,
+    types::VectorOfMat,
+    videoio::VideoCapture,
 };
 use scrap::{Capturer, Display};
-use std::{ops::{Deref, DerefMut}, sync::{atomic::AtomicBool, Arc, Mutex}, time::{Duration, Instant, SystemTime}};
-use std::thread;
 use std::io::ErrorKind;
+use std::thread;
+use std::{
+    ops::{Deref, DerefMut},
+    sync::{atomic::AtomicBool, Arc, Mutex},
+    time::{Duration, Instant, SystemTime},
+};
 
 pub struct MotionDetector {
     previous_frame: Option<Mat>,
@@ -71,18 +82,22 @@ impl MotionDetector {
         // let width = cap.width();
         // let height = cap.height();
 
-        let portion = autopilot::bitmap::capture_screen_portion(autopilot::geometry::Rect { origin: autopilot::geometry::Point::new(self.x as f64, self.y as f64), size: autopilot::geometry::Size::new(self.width as f64, self.height as f64) }).ok()?;
+        let portion = autopilot::bitmap::capture_screen_portion(autopilot::geometry::Rect {
+            origin: autopilot::geometry::Point::new(self.x as f64, self.y as f64),
+            size: autopilot::geometry::Size::new(self.width as f64, self.height as f64),
+        })
+        .ok()?;
         // let one_frame = cap
         //     .frame()
         //     .expect("Failed to capture frame");
-    
+
         // Convert the frame to a Mat (2D)
         let portion = portion;
 
         let raw = portion.image.as_rgb8()?;
 
         let mat = Mat::from_slice(&raw).ok()?;
-    
+
         // Reshape the flat buffer into a 2D matrix (with 4 channels for RGBA)
         let mat = mat.reshape(3, portion.size.height as i32).unwrap();
 
@@ -99,7 +114,14 @@ impl MotionDetector {
         // Convert to grayscale
         let mut gray = Mat::default();
 
-        imgproc::cvt_color(&mat, &mut gray, COLOR_BGR2GRAY, 0).ok()?;
+        imgproc::cvt_color(
+            &mat,
+            &mut gray,
+            COLOR_BGR2GRAY,
+            0,
+            AlgorithmHint::ALGO_HINT_DEFAULT,
+        )
+        .ok()?;
 
         let mut output = Mat::default();
         // Apply GaussianBlur
@@ -110,13 +132,14 @@ impl MotionDetector {
             0.0,
             0.0,
             BORDER_DEFAULT,
-        ).ok()?;
+            AlgorithmHint::ALGO_HINT_DEFAULT,
+        )
+        .ok()?;
 
         if let Some(previous_frame) = &self.previous_frame {
-             // Compute the absolute difference between the current frame and the previous frame
+            // Compute the absolute difference between the current frame and the previous frame
             let mut frame_diff = Mat::default();
-            opencv::core::absdiff(previous_frame, &output, &mut frame_diff)
-                .unwrap();
+            opencv::core::absdiff(previous_frame, &output, &mut frame_diff).unwrap();
             self.previous_frame = Some(output);
 
             // if let Some(previous_time) = self.previous_time {
@@ -135,8 +158,6 @@ impl MotionDetector {
                 THRESH_BINARY,
             )
             .unwrap();
-
-            
 
             // Find contours of the movement
             let mut contours = VectorOfMat::new();
@@ -172,29 +193,45 @@ impl MotionDetector {
     }
 
     pub fn detect_motion_color(&mut self) -> Option<opencv::core::Rect> {
-        let portion = autopilot::bitmap::capture_screen_portion(autopilot::geometry::Rect { origin: autopilot::geometry::Point::new(self.x as f64, self.y as f64), size: autopilot::geometry::Size::new(self.width as f64, self.height as f64) }).ok()?;
+        let portion = autopilot::bitmap::capture_screen_portion(autopilot::geometry::Rect {
+            origin: autopilot::geometry::Point::new(self.x as f64, self.y as f64),
+            size: autopilot::geometry::Size::new(self.width as f64, self.height as f64),
+        })
+        .ok()?;
 
         // let one_frame = cap
         //     .frame()
         //     .expect("Failed to capture frame");
-    
+
         // Convert the frame to a Mat (2D)
 
         let raw = portion.image.as_rgb8()?;
 
         let mat = Mat::from_slice(&raw).ok()?;
-    
+
         // Reshape the flat buffer into a 2D matrix (with 4 channels for RGBA)
         let frame = mat.reshape(3, portion.size.height as i32).ok()?;
 
-
         // Convert the captured frame to HSV color space
         let mut hsv_frame = Mat::default();
-        imgproc::cvt_color(&frame, &mut hsv_frame, COLOR_BGR2HSV, 0).ok()?;
+        imgproc::cvt_color(
+            &frame,
+            &mut hsv_frame,
+            COLOR_BGR2HSV,
+            0,
+            AlgorithmHint::ALGO_HINT_DEFAULT,
+        )
+        .ok()?;
 
         // Create a mask for green color
         let mut green_mask = Mat::default();
-        opencv::core::in_range(&hsv_frame, &self.color_lower, &self.color_upper, &mut green_mask).ok()?;
+        opencv::core::in_range(
+            &hsv_frame,
+            &self.color_lower,
+            &self.color_upper,
+            &mut green_mask,
+        )
+        .ok()?;
 
         // Apply the mask to the frame to isolate green regions
         let mut green_frame = Mat::default();
@@ -203,7 +240,14 @@ impl MotionDetector {
         // Convert the green frame to grayscale
         let mut gray = Mat::default();
 
-        imgproc::cvt_color(&green_frame, &mut gray, COLOR_BGR2GRAY, 0).ok()?;
+        imgproc::cvt_color(
+            &green_frame,
+            &mut gray,
+            COLOR_BGR2GRAY,
+            0,
+            AlgorithmHint::ALGO_HINT_DEFAULT,
+        )
+        .ok()?;
         let mut output = Mat::default();
         // Apply GaussianBlur
         imgproc::gaussian_blur(
@@ -213,6 +257,7 @@ impl MotionDetector {
             0.0,
             0.0,
             BORDER_DEFAULT,
+            AlgorithmHint::ALGO_HINT_DEFAULT,
         )
         .unwrap();
 
@@ -223,14 +268,27 @@ impl MotionDetector {
             opencv::core::absdiff(previous_frame, &output, &mut frame_diff).unwrap();
             self.previous_frame = Some(output);
 
-
             // Apply a threshold to get a binary image
             let mut thresh = Mat::default();
-            imgproc::threshold(&frame_diff, &mut thresh, self.threshold, 255.0, THRESH_BINARY).unwrap();
+            imgproc::threshold(
+                &frame_diff,
+                &mut thresh,
+                self.threshold,
+                255.0,
+                THRESH_BINARY,
+            )
+            .unwrap();
 
             // Find contours of the movement
             let mut contours = VectorOfMat::new();
-            imgproc::find_contours(&thresh, &mut contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, opencv::core::Point::new(0, 0)).unwrap();
+            imgproc::find_contours(
+                &thresh,
+                &mut contours,
+                RETR_EXTERNAL,
+                CHAIN_APPROX_SIMPLE,
+                opencv::core::Point::new(0, 0),
+            )
+            .unwrap();
 
             // Process the contours to detect significant movement
             for contour in contours.iter() {
@@ -251,13 +309,11 @@ impl MotionDetector {
     }
 }
 
-
 pub struct SmartTrigger {
     detector: Mutex<MotionDetector>,
     trigger: Mutex<Option<(Rect, SystemTime)>>,
     last_flush: Mutex<Option<SystemTime>>,
 }
-
 
 impl SmartTrigger {
     pub fn new(detector: MotionDetector) -> Self {
@@ -273,7 +329,12 @@ impl SmartTrigger {
         if let Some(rect) = self.detector.lock().unwrap().detect() {
             let t = SystemTime::now();
             let mut tr = self.trigger.lock().unwrap();
-            let brect = Rect::new(rect.x as f32, rect.y as f32, (rect.x + rect.width) as f32, (rect.y + rect.height) as f32);
+            let brect = Rect::new(
+                rect.x as f32,
+                rect.y as f32,
+                (rect.x + rect.width) as f32,
+                (rect.y + rect.height) as f32,
+            );
             if let Some((_, tp)) = tr.deref() {
                 if tp < &t {
                     *tr.deref_mut() = Some((brect, t));
@@ -281,7 +342,6 @@ impl SmartTrigger {
             } else {
                 *tr.deref_mut() = Some((brect, t));
             }
-            
         }
     }
 
@@ -290,7 +350,7 @@ impl SmartTrigger {
         let mut lt = self.last_flush.lock().unwrap();
         if let Some((rect, trigger)) = tr.deref().clone() {
             *tr.deref_mut() = None;
-            
+
             if lt.map(|x| x + buffer < trigger).unwrap_or(true) {
                 *lt.deref_mut() = Some(trigger);
                 Some((rect, trigger))
@@ -306,7 +366,7 @@ impl SmartTrigger {
         self.trigger.lock().unwrap().take();
         self.last_flush.lock().unwrap().take();
     }
-    
+
     pub fn daemon(this: Arc<Self>) {
         loop {
             Self::update(&this);

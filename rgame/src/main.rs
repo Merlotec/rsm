@@ -227,7 +227,7 @@ fn main() {
     };
 
     // trainer.plot("ml_pre.png");
-    
+
     // let agg = trainer.generate_aggregate(0.5).unwrap();
     // agg.plot(true, "ml_agg.png");
 
@@ -336,7 +336,7 @@ fn main() {
         .insert_resource(smart_trigger)
         .insert_resource(board_trigger)
         .insert_resource(MlRes::new(trainer, settings.weights.clone()))
-        .insert_resource(ApTrainRes {train: false})
+        .insert_resource(ApTrainRes { train: false })
         .insert_resource(settings)
         .insert_resource(history_res)
         .insert_resource(AutopilotState::Offline)
@@ -372,7 +372,13 @@ pub struct MlRes {
 
 impl MlRes {
     pub fn new(trainer: MlTrainer, weights: Vec<MlWeights>) -> Self {
-        Self {trainer, ticker: None, prediction: None, min_tick_t: 15.0, weights }
+        Self {
+            trainer,
+            ticker: None,
+            prediction: None,
+            min_tick_t: 15.0,
+            weights,
+        }
     }
 }
 
@@ -391,7 +397,11 @@ impl Ticker {
     }
 
     pub fn series(&self) -> Series {
-        self.ticks.iter().enumerate().map(|(i, t)| (*t, -std::f64::consts::PI * 2.0 * i as f64)).collect()
+        self.ticks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (*t, -std::f64::consts::PI * 2.0 * i as f64))
+            .collect()
     }
 
     pub fn cleaned_series(&self, max_t: f64) -> Option<Series> {
@@ -400,27 +410,33 @@ impl Ticker {
         }
         let first = *self.ticks.first()?;
 
-        let series: Vec<(f64, f64)> = self.ticks.iter().enumerate().filter_map(|(i, t)| {
-            let tafter = t - first;
-            if tafter > max_t {
-                None
-            } else {
-                let x = -std::f64::consts::PI * 2.0 * i as f64;
-                Some((tafter, x))
-            }
-        }).collect();
+        let series: Vec<(f64, f64)> = self
+            .ticks
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| {
+                let tafter = t - first;
+                if tafter > max_t {
+                    None
+                } else {
+                    let x = -std::f64::consts::PI * 2.0 * i as f64;
+                    Some((tafter, x))
+                }
+            })
+            .collect();
 
-        if series.len() < 2{
+        if series.len() < 2 {
             return None;
         }
 
-        let deltas: Vec<f64> = (0..series.len() - 1).map(|i| series[i+1].0 - series[i].0).collect();
-        for i in 0..deltas .len() - 1 {
-            if deltas[i+1] < deltas[i] {
+        let deltas: Vec<f64> = (0..series.len() - 1)
+            .map(|i| series[i + 1].0 - series[i].0)
+            .collect();
+        for i in 0..deltas.len() - 1 {
+            if deltas[i + 1] < deltas[i] {
                 return None;
             }
         }
-
 
         Some(series)
     }
@@ -430,7 +446,6 @@ impl Ticker {
 pub struct ApTrainRes {
     pub train: bool,
 }
-
 
 #[derive(Resource, Debug)]
 pub enum AutopilotState {
@@ -521,9 +536,7 @@ fn create_board(mut commands: Commands, asset_server: Res<AssetServer>, settings
         prev_down: false,
         start: None,
     });
-    commands.insert_resource(ApTrainRes {
-        train: false,
-    });
+    commands.insert_resource(ApTrainRes { train: false });
 
     let trainer = if let Ok(s) = std::fs::read_to_string("trainer.json") {
         serde_json::from_str(&s).unwrap_or_default()
@@ -644,7 +657,7 @@ fn input(
 
                             trigger.state = TriggerState::Armed;
                             smart_trigger.0.clear(); // Flush so we don't get a detection at the start.
-                            // Start the ticker if trainimg mode.
+                                                     // Start the ticker if trainimg mode.
                             if sim.train_dyn {
                                 ml.ticker = Some(Ticker::start())
                             }
@@ -714,8 +727,6 @@ fn input(
                             ml.trainer.plot("ml.png");
                         }
                     }
-                    
-
 
                     let old_k = sim.state.params.k;
                     let old_att = sim.state.params.att;
@@ -733,10 +744,9 @@ fn input(
                 }
                 Some(KeyCode::M) => {
                     // Train the model.
-                    
+
                     ap_train.train = !ap_train.train;
                     screen_print!(sec: 5.0, col: Color::PINK, "AUTOPILOT TRAINING ENABLED: {}", ap_train.train);
-                    
                 }
                 Some(KeyCode::R) => {
                     reset = true;
@@ -749,7 +759,6 @@ fn input(
     if train_events.read().count() > 0 {
         // Train
         if let Some(ticker) = ml.ticker.take() {
-
             let max_t = if let Some((pr, t)) = &ml.prediction {
                 if let Some(t0) = pr.head.first().map(|x| x.0) {
                     (pr.t_end - t0) + 2.5
@@ -772,12 +781,13 @@ fn input(
                     settings.weights = ml.weights.clone();
 
                     settings.write("settings.json");
-                    
                 }
 
                 if let Some(last) = series.last().cloned() {
                     if let Ok(hdd) = Dataset::new_aligned(series, ml.trainer.v_star) {
-                        if let Ok(hdd) = hdd.extrapolate_higher_deriv(vec![0.1, 0.1], 2, 1.0, last.0 + 2.0) {
+                        if let Ok(hdd) =
+                            hdd.extrapolate_higher_deriv(vec![0.1, 0.1], 2, 1.0, last.0 + 2.0)
+                        {
                             if let Err(e) = ml.trainer.add_series_aligned(hdd.series, 1.0) {
                                 screen_print!(sec: 5.0, col: Color::RED, "TRAINING FAILED: {}", e);
                             } else {
@@ -792,8 +802,6 @@ fn input(
                         }
                     }
                 }
-             
-                
             } else {
                 screen_print!(sec: 5.0, col: Color::RED, "TRAINING FAILED - UNCLEAN");
             }
@@ -921,18 +929,20 @@ pub fn autopilot_system(
 
             let mut solved = false;
             if let Some((pr, start)) = &ml.prediction {
-                let ps_t_end = sim.state.time(*start + Duration::from_secs_f64(pr.t_end - pr.t_head));
+                let ps_t_end = sim
+                    .state
+                    .time(*start + Duration::from_secs_f64(pr.t_end - pr.t_head));
                 if let Some(sln) = sim.state.finalize(ps_t_end, pr.x_end) {
                     screen_print!(sec: 20.0, col: Color::CYAN, "sln: {}, i: {}, n: {}", sln.plate_pos, sln.i, sln.n);
                     sim.solution = Some(sln);
                     let bet = Bet::surrounding(sln.i, 10);
                     sim.bet = Some(bet);
                     next_state = Some(AutopilotState::AwaitingDrop);
-                }// else {
-                //     screen_print!(sec: 2.0, col: Color::RED, "ERROR finding solution");
-                //     trigger.state = TriggerState::Idle;
-                //     next_state = Some(AutopilotState::AwaitingReset);
-                // }
+                } // else {
+                  //     screen_print!(sec: 2.0, col: Color::RED, "ERROR finding solution");
+                  //     trigger.state = TriggerState::Idle;
+                  //     next_state = Some(AutopilotState::AwaitingReset);
+                  // }
             }
         }
         AutopilotState::AwaitingDrop => {
@@ -949,8 +959,11 @@ pub fn autopilot_system(
             }
 
             if let Some((pr, start)) = &ml.prediction {
-            
-                let t = SystemTime::now().duration_since(*start).unwrap().as_secs_f64() + pr.t_head;
+                let t = SystemTime::now()
+                    .duration_since(*start)
+                    .unwrap()
+                    .as_secs_f64()
+                    + pr.t_head;
                 if t > pr.t_end {
                     let viewer = Arc::new(Mutex::new(NumberViewer::new(settings.result_rect)));
                     let viewer_cl = viewer.clone();
@@ -1106,7 +1119,6 @@ pub fn autopilot_system(
                         train_events.send(Train);
                     }
                     reset_events.send(Reset);
-                    
                 }
             }
         }
@@ -1152,15 +1164,18 @@ pub fn update_dynamic(
 ) {
     for (mut dynamic, mut transform) in dynamics.iter_mut() {
         if let Some((pr, start)) = &ml.prediction {
-            
-            let t = SystemTime::now().duration_since(*start).unwrap().as_secs_f64() + pr.t_head;
+            let t = SystemTime::now()
+                .duration_since(*start)
+                .unwrap()
+                .as_secs_f64()
+                + pr.t_head;
             if t > pr.t_end {
-               if let Some(plate) = sim.plate{
+                if let Some(plate) = sim.plate {
                     if let Some(sln) = &sim.solution {
                         let p = plate.dis + sln.plate_pos;
                         transform.translation.x = R_1 * p.sin() as f32;
                         transform.translation.y = R_1 * p.cos() as f32;
-                    } 
+                    }
                 }
             } else {
                 let dis = pr.zero_dis(t);
@@ -1189,16 +1204,16 @@ pub fn update_dynamic(
                     );
                     transform.translation.x = R * next.dis.sin() as f32;
                     transform.translation.y = R * next.dis.cos() as f32;
-    
+
                     sim.dynamic = Some(next);
-    
+
                     if ds.vel.abs() < sim.state.params.min_vel && !sim.train_dyn {
                         //beep();
                         if let Some(sln) = sim.state.finalize(ds.t, ds.dis) {
                             //screen_print!(sec: 20.0, col: Color::DARK_GREEN, "SOLUTION: sln: {}, i: {}, n: {}", sln.plate_pos, sln.i, sln.n);
                             dynamic.0 = Some(sln.plate_pos)
                         }
-    
+
                         sim.dynamic = None;
                     }
                 }
@@ -1296,7 +1311,7 @@ fn auto_trigger(
                     //     let rel_a = a - ac;
 
                     //     //println!("TR: {}", pos);
-                        
+
                     //     if sim.train_dyn {
                     //         sim.state.dynamic_click(t, rel_a, 0.2, 0.2, 1.0, 1.0);
                     //     } else {
@@ -1327,7 +1342,7 @@ fn auto_trigger(
                         let tx = now.duration_since(ticker.start).unwrap().as_secs_f64();
                         ticker.ticks.push(tx);
                         if pr_is_none && ticker.ticks.len() >= 3 {
-                            let t0= ticker.ticks[ticker.ticks.len() - 2];
+                            let t0 = ticker.ticks[ticker.ticks.len() - 2];
 
                             if tx - t0 > 1.0 {
                                 start = Some(now);
@@ -1335,9 +1350,7 @@ fn auto_trigger(
                         }
 
                         //if ticker.
-                        
                     }
-                    
 
                     if let Some(start) = start {
                         let series = ml.ticker.as_ref().unwrap().series();
@@ -1350,15 +1363,22 @@ fn auto_trigger(
 
                         if let Ok(ds) = agg {
                             let te = ds.series.last().unwrap().0;
-                            if let Ok(eds) = ds.extrapolate_higher_deriv(vec![0.1, 0.1], 6, 1.0, 12.0) {
+                            if let Ok(eds) =
+                                ds.extrapolate_higher_deriv(vec![0.1, 0.1], 6, 1.0, 12.0)
+                            {
                                 match eds.predict(series, 8.0, 0.0) {
                                     Ok(pr) => {
                                         println!("te: {}, t_end: {}", te, pr.t_end);
-                                        Dataset::plot_series(&[&pr.path.series, &pr.head], "sln.png");
-                                         // Calculate solution!!
+                                        Dataset::plot_series(
+                                            &[&pr.path.series, &pr.head],
+                                            "sln.png",
+                                        );
+                                        // Calculate solution!!
                                         ml.prediction = Some((pr, start));
-                                    },
-                                    Err(e) => screen_print!(col: Color::RED, "Failed to predict: {}", e),
+                                    }
+                                    Err(e) => {
+                                        screen_print!(col: Color::RED, "Failed to predict: {}", e)
+                                    }
                                 }
                             }
                         }
